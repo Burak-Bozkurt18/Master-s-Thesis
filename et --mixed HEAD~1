@@ -1,0 +1,41 @@
+[33mc9808a5[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m Initial commit
+ .gitignore                                 |     6 [32m+[m
+ AFRREO.csv                                 |  1653 [32m++[m
+ Crisis Data.R                              |  1145 [32m+[m
+ GDD.csv                                    |  2091 [32m++[m
+ IMF_AFR_Credit_Growth.xls                  |   Bin [31m0[m -> [32m155648[m bytes
+ IMF_AFR_Credit_to_GDP.xls                  |   Bin [31m0[m -> [32m155648[m bytes
+ IMF_Debt_Database.xls                      |   Bin [31m0[m -> [32m474112[m bytes
+ IMF_MFS_BroadMoney.csv                     |   285 [32m+[m
+ IMF_MFS_LTR.csv                            |    68 [32m+[m
+ IMF_MFS_STR.csv                            |   180 [32m+[m
+ JSTdatasetR6.xlsx                          |   Bin [31m0[m -> [32m1408158[m bytes
+ MFS_DC.csv                                 | 36993 [32m+++++++++++++++++++++++++++[m
+ MFS_IR.csv                                 |  3396 [32m+++[m
+ MFS_MA.csv                                 |  3017 [32m+++[m
+ Master's Thesis.Rproj                      |    13 [32m+[m
+ NetAssets_IMF_MFS.csv                      |   185 [32m+[m
+ NetAssets_WDI.csv                          |   272 [32m+[m
+ OECD_STIR_LTIR.xlsx                        |   Bin [31m0[m -> [32m132320[m bytes
+ PFMH.xlsx                                  |   Bin [31m0[m -> [32m2254440[m bytes
+ Rates_OECD.xlsx                            |   Bin [31m0[m -> [32m130899[m bytes
+ SYSTEMIC_BANKING_CRISES_DATABASE_2026.xlsx |   Bin [31m0[m -> [32m47716[m bytes
+ WDI_BroadMoney.csv                         |   804 [32m+[m
+ WEO.csv                                    |  8457 [32m++++++[m
+ WEOApr2026all.xlsx                         |   Bin [31m0[m -> [32m5585205[m bytes
+ WS_CREDIT_GAP_csv_col.csv                  |   133 [32m+[m
+ WS_LONG_CPI_csv_col.csv                    |   253 [32m+[m
+ WS_SPP_csv_col.csv                         |   245 [32m+[m
+ WS_TC_csv_col.csv                          |  1134 [32m+[m
+ bcagdp_wdi.csv                             |   271 [32m+[m
+ bmtr_wdi.csv                               |   271 [32m+[m
+ gdp_wdi.csv                                |   271 [32m+[m
+ loans_to_deposit_gfd.csv                   |   231 [32m+[m
+ loans_to_deposit_mfs.csv                   |   541 [32m+[m
+ rgdp_IMF_PFMH.xls                          |   Bin [31m0[m -> [32m1302528[m bytes
+ rltr_IMF_PFMH.xls                          |   Bin [31m0[m -> [32m1268224[m bytes
+ str_eurostat.xlsx                          |   Bin [31m0[m -> [32m19181[m bytes
+ wdi1.csv                                   |   754 [32m+[m
+ wdi2.csv                                   |   567 [32m+[m
+ ~$Rates_OECD.xlsx                          |   Bin [31m0[m -> [32m165[m bytes
+ 39 files changed, 63236 insertions(+)
