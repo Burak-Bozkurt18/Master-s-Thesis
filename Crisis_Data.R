@@ -7,7 +7,6 @@
 library(readxl)
 library(tidyverse)
 library(countrycode)
-library(usethis)
 
 # 2 Read and Clean Data ====================================================
 
@@ -292,27 +291,8 @@ panel <- panel |>
 ### 2.4.1 Nominal ======================================================
 
 # WDI
-ngdplc_wdi <- read_csv("gdp_wdi.csv", skip = 3)
 
-# remove unnecessary last column
-ngdplc_wdi <- ngdplc_wdi |> 
-  select(-last_col())
-
-ngdplc_wdi_long <- ngdplc_wdi |> 
-  pivot_longer(
-    cols = !(`Country Name`:`Indicator Code`),
-    names_to = "Year",
-    values_to = "ngdplc"
-  ) |> 
-  mutate(
-    Year = as.integer(Year),
-    `Country Code`,
-    ngdplc = ngdplc / 1000000000,
-    .keep = "none"
-  ) |> 
-  rename("iso3c" = `Country Code`)
-
-panel <- left_join(panel, ngdplc_wdi_long, by = c("iso3c", "Year"))
+panel <- left_join(panel, wdi2_long |> select(Year, iso3c, gdp) , by = c("iso3c", "Year"))
 
 ### 2.4.2 Real Growth ==================================================
 
@@ -445,9 +425,9 @@ panel <- left_join(panel, gdd_long |> select(iso3c, Year, cgdpcorp, cgdph), by =
 
 # Create approximated credit column
 credit_approx <- panel |> 
-  select(iso3c, Year, cgdppriv, ngdplc) |> 
+  select(iso3c, Year, cgdppriv, gdp) |> 
   mutate(
-    tloanspriv_approx = cgdppriv / 100 * ngdplc,
+    tloanspriv_approx = cgdppriv / 100 * gdp,
     Year,
     iso3c,
     .keep = "none"
