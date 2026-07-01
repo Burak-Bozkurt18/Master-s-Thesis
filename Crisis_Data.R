@@ -64,7 +64,8 @@ afrreo_long <- afrreo |>
       "Broad money, Percent of GDP",
       "Credit to the private sector, Percent change",
       "Credit to the private sector, Percent of GDP",
-      "Current account balance (credit less debit), Percent of GDP"
+      "Current account balance (credit less debit), Percent of GDP",
+      "Gross domestic product (GDP), Constant prices, Percent change"
     ),
     !(COUNTRY %in% c(
       "Sub-Saharan Africa excluding Nigeria and South Africa", 
@@ -92,6 +93,7 @@ afrreo_long <- afrreo |>
     bcagdp = `Current account balance (credit less debit), Percent of GDP`,
     privloansgr = `Credit to the private sector, Percent change`,
     cgdppriv = `Credit to the private sector, Percent of GDP`,
+    rgdpgrowth = `Gross domestic product (GDP), Constant prices, Percent change`,
     .keep = "none"
   )
 
@@ -296,15 +298,50 @@ panel <- left_join(panel, wdi2_long |> select(Year, iso3c, gdp) , by = c("iso3c"
 
 ### 2.4.2 Real Growth ==================================================
 
-rgdp <- pfmh |> 
+rgdp_pfmh <- pfmh |> 
   select(isocode, year, rgc) |> 
   rename(
     "iso3c" = isocode,
     "Year" = year
   )
 
-panel <- left_join(panel, rgdp,
-                   by = c("iso3c", "Year"))
+rgdp_afrreo <- afrreo_long |> select(iso3c, Year, rgdpgrowth)
+
+# Combine datasets
+rgdp_comb <- rgdp_pfmh |> 
+  full_join(rgdp_afrreo, by = c("iso3c", "Year"))
+
+# Choose the longest series per country
+
+counts <- rgdp_comb |> 
+  filter(Year >= "1970" & Year <= "2025") |> 
+  group_by(iso3c) |> 
+  summarise(
+    n_pfmh = sum(!is.na(rgc)),
+    n_afrreo = sum(!is.na(rgdpgrowth)),
+  ) |>
+  mutate(
+    source = case_when(
+      n_pfmh >= n_afrreo  ~ "pfmh",
+      TRUE            ~ "afrreo"
+    )
+  )
+
+rgdp_comb <- rgdp_comb |> 
+  left_join(counts |> select(iso3c, source), by = "iso3c")
+
+rgdp_comb <- rgdp_comb |> 
+  mutate(
+    rgdp = case_when(
+      source == "pfmh"    ~ rgc,
+      source == "afrreo"    ~ rgdpgrowth,
+    )
+  )
+
+
+# Add to panel
+
+panel <- left_join(panel, rgdp_comb |> select(iso3c, Year, rgdp), by = c("iso3c", "Year"))
 
 
 
