@@ -130,6 +130,10 @@ mfs_str <- read_csv("IMF_MFS_STR.csv")
 mfs_ltr <- read_csv("IMF_MFS_LTR.csv")
 bmoney_mfs <- read_csv("IMF_MFS_BroadMoney.csv")
 ltd_mfs <- read_csv("loans_to_deposit_mfs.csv")
+sp_mfs <- read_csv("sp_mfs.csv")
+
+# OECD
+sp_oecd <- read_xlsx("sp_oecd.xlsx", skip = 5)
 
 
 # World Development Indicators
@@ -1142,7 +1146,124 @@ ltd_comb <- ltd_comb |>
 panel <- left_join(panel, ltd_comb |> select(iso3c, Year, ltd), by = c("iso3c", "Year"))
 
 
-## 2.13 Check how many obs ===================================================
+## 2.13 Share prices =========================================================
+
+# OECD
+sp_oecd_long <- sp_oecd |> 
+  slice(2:49) |> 
+  select(-c(`Time period...2`, `...76`)) |> 
+  rename("Country" = `Time period...1`) |> 
+  pivot_longer(
+    cols = -Country,
+    names_to = "Year",
+    values_to = "sp"
+  ) |> 
+  mutate(
+    Year = as.integer(Year),
+    iso3c = countrycode(Country, origin = "country.name", destination = "iso3c"),
+    sp,
+    .keep = "none"
+  )
+
+# IMF MFS
+sp_mfs_long <- sp_mfs |> 
+  pivot_longer(
+    cols = !(DATASET:SCALE),
+    names_to = "Year",
+    values_to = "sp"
+  ) |> 
+  select(COUNTRY, Year, sp, TYPE_OF_TRANSFORMATION) |> 
+  pivot_wider(
+    names_from = TYPE_OF_TRANSFORMATION,
+    values_from = sp
+  ) |> 
+  mutate(
+    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
+    Year = as.integer(Year),
+    sppa = `Period average, Index`,
+    speop = `End-of-period (EoP), Index`,
+    .keep = "none")
+
+# Choose the longest mfs share price series (period avrg. vs end-of-period)
+counts <- sp_mfs_long |> 
+  filter(Year >= "1970" & Year <= "2025") |> 
+  group_by(iso3c) |> 
+  summarise(
+    n_sppa = sum(!is.na(sppa)),
+    n_speop = sum(!is.na(speop))
+  ) |>
+  mutate(
+    source = case_when(
+      n_sppa >= n_speop ~ "sppa",
+      TRUE            ~ "speop"
+    )
+  )
+
+sp_mfs_long <- sp_mfs_long |> 
+  left_join(counts |> select(iso3c, source), by = "iso3c")
+
+sp_mfs_long <- sp_mfs_long |> 
+  mutate(
+    sp = case_when(
+      source == "sppa"    ~ sppa,
+      source == "speop"    ~ speop,
+    )
+  )
+
+# Combine datasets
+sp_comb <- sp_oecd_long |> 
+  full_join(sp_mfs_long |> select(Year, iso3c, sp), by = c("iso3c", "Year"), suffix = c("_oecd", "_mfs"))
+
+# Choose the longest series
+counts <- sp_comb |> 
+  filter(Year >= "1970" & Year <= "2025") |> 
+  group_by(iso3c) |> 
+  summarise(
+    n_oecd = sum(!is.na(sp_oecd)),
+    n_mfs = sum(!is.na(sp_mfs))
+  ) |>
+  mutate(
+    source = case_when(
+      n_oecd >= n_mfs ~ "oecd",
+      TRUE            ~ "mfs"
+    )
+  )
+
+sp_comb <- sp_comb |> 
+  left_join(counts |> select(iso3c, source), by = "iso3c")
+
+# Rebase the MFS series
+# IMF -> 2015 = 100
+
+base2015 <- sp_comb |>
+  filter(source == "mfs", Year == 2015) |>
+  select(iso3c, base2015 = sp_mfs)
+
+sp_comb <- sp_comb |>
+  left_join(base2015, by = "iso3c") |>
+  mutate(
+    sp_mfs2015 = if_else(
+      source == "mfs",
+      sp_mfs / base2015 * 100,
+      NA_real_
+    )
+  ) |>
+  select(-base2015)
+
+
+sp_comb <- sp_comb |> 
+  mutate(
+    sp = case_when(
+      source == "oecd"    ~ sp_oecd,
+      source == "mfs"    ~ sp_mfs2015,
+    )
+  )
+
+# Add to panel
+panel <- left_join(panel, sp_comb |> select(iso3c, Year, sp), by = c("iso3c", "Year"))
+
+
+## 2.14 Check how many obs ===================================================
 
 check <- panel |>
   group_by(Country) |>
@@ -1157,7 +1278,7 @@ check <- panel |>
 sort(colSums(check[,-1]), decreasing = T)
 
 panel |> 
-  select(cgdppriv, rgc, inflation, nfa, bmgrowth, govcgdp, tloanspriv_growth, ltd, bmtr, cgdpcorp, cgdph) |> 
+  select(cgdppriv, rgdp, inflation, nfa, bmgrowth, govcgdp, tloanspriv_growth, ltd, bmtr, cgdpcorp, cgdph) |> 
   complete.cases() |> 
   sum()
 
