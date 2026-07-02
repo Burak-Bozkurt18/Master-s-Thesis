@@ -424,9 +424,6 @@ cgdp_comb <- cgdp_bis_long |>
   )
 
 
-
-
-
 # Choose the longest series per country
 
 counts <- cgdp_comb |> 
@@ -466,9 +463,11 @@ panel <- left_join(panel, gdd_long |> select(iso3c, Year, cgdpcorp, cgdph), by =
 
 # Create approximated credit column
 credit_approx <- panel |> 
-  select(iso3c, Year, cgdppriv, gdp) |> 
+  select(iso3c, Year, cgdppriv, cgdpcorp, cgdph, gdp) |> 
   mutate(
     tloanspriv_approx = cgdppriv / 100 * gdp,
+    tloanscorp_approx = cgdpcorp / 100 * gdp,
+    tloansh_approx = cgdph / 100 * gdp,
     Year,
     iso3c,
     .keep = "none"
@@ -499,10 +498,14 @@ country_corr <- credit_comb |>
 
 # Fill in missing values in tloanspriv with the approximated values
 credit_comb <- credit_comb |> 
-  mutate(tloanspriv = coalesce(tloanspriv, tloanspriv_approx))
+  mutate(
+    tloanspriv = coalesce(tloanspriv, tloanspriv_approx),
+    tloanscorp = coalesce(tloanscorp, tloanscorp_approx),
+    tloansh = coalesce(tloansh, tloansh_approx)
+    )
 
 # Add to panel
-panel <- left_join(panel, credit_comb |> select(-tloanspriv_approx), by = c("iso3c", "Year"))
+panel <- left_join(panel, credit_comb |> select(- c(tloanspriv_approx, tloanscorp_approx, tloansh_approx) ), by = c("iso3c", "Year"))
 
 # Calculate credit growth
 
@@ -510,7 +513,9 @@ panel <- panel |>
   arrange(iso3c, Year) |>
   group_by(iso3c) |>
   mutate(
-    tloanspriv_growth = (log(tloanspriv) - lag(log(tloanspriv))) * 100
+    tloanspriv_growth = (log(tloanspriv) - lag(log(tloanspriv))) * 100,
+    tloanscorp_growth = (log(tloanscorp) - lag(log(tloanscorp))) * 100,
+    tloansh_growth = (log(tloansh) - lag(log(tloansh))) * 100
   ) |>
   ungroup()
 
