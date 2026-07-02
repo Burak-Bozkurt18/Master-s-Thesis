@@ -1281,9 +1281,15 @@ check <- panel |>
   )
 
 sort(colSums(check[,-1]), decreasing = T)
+sort(rowSums(check[,-1]), decreasing = T)
 
 panel |> 
   select(cgdppriv, rgdp, inflation, nfa, bmgrowth, govcgdp, tloanspriv_growth, ltd, bmtr, cgdpcorp, cgdph) |> 
   complete.cases() |> 
   sum()
+
+check |>
+  select(-(n_ShortRate:n_LongRateCompl)) |> 
+  mutate(total_obs = rowSums(across(-Country), na.rm = TRUE)) |>
+  arrange(desc(total_obs)) |> View()
 
