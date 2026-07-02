@@ -22,6 +22,9 @@ credit_bis <- read.csv("WS_TC_csv_col.csv")
 cgdp_bis <- read_csv("WS_CREDIT_GAP_csv_col.csv")
 bis_cpi <- read_csv("WS_LONG_CPI_csv_col.csv")
 
+# Eurostat
+str_eurostat <- read_xlsx("str_eurostat.xlsx", sheet = 2, skip = 7, na = c("", "NA", ":"))
+
 # IMF Global Debt Database
 gdd <- read_csv("GDD.csv")
 
@@ -134,7 +137,7 @@ sp_mfs <- read_csv("sp_mfs.csv")
 
 # OECD
 sp_oecd <- read_xlsx("sp_oecd.xlsx", skip = 5)
-
+ir_oecd <- read_xlsx("OECD_STIR_LTIR.xlsx", skip = 3)
 
 # World Development Indicators
 wdi1 <- read_csv("wdi1.csv", na = c("", "NA", ".."))
@@ -802,34 +805,31 @@ panel <- left_join(panel, nfa_combined |> select(Year, iso3c, nfa), by = c("iso3
 
 ## 2.10 Yield curve ===================================
 
-oecd <- read_xlsx("OECD_STIR_LTIR.xlsx", skip = 3)
+# OECD
 
 # Get rid of useless rows and column
-oecd <- oecd |> 
+ir_oecd <- ir_oecd |> 
   slice_head(n = -2) |> 
   select(-last_col())
 
-oecd_long <- oecd |>
+ir_oecd_long <- ir_oecd |>
   pivot_longer(
     cols = matches("^\\d{4}$"),
     names_to = "Year",
     values_to = "Value"
   ) |> 
-  mutate(Year = as.integer(Year))
+  pivot_wider(
+    names_from = Measure,
+    values_from = Value
+  ) |> 
+  mutate(
+    Year = as.integer(Year),
+    iso3c = countrycode(`Reference area`, origin = "country.name", destination = "iso3c"),
+    ltr_oecd = `Long-term interest rates`,
+    str_oecd = `Short-term interest rates`,
+    .keep = "none"
+  )
 
-# Add country codes
-oecd_long <- oecd_long |> 
-  mutate(iso3c = countrycode(`Reference area`, origin = "country.name", destination = "iso3c"))
-
-# Split OECD into long term and short term interest rates
-
-oecd_str <- oecd_long |>
-  filter(Measure == "Short-term interest rates") |> 
-  rename("str_oecd" = Value) |> 
-  select(Year, iso3c, str_oecd)
-
-oecd_ltr <- oecd_long |>
-  filter(Measure == "Long-term interest rates")
 
 
 # IMF MFS
@@ -867,19 +867,14 @@ mfs_ltr_long <- mfs_ltr |>
     values_to = "Value"
   ) |> 
   mutate(
-    COUNTRY,
+    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
     Year = as.integer(Year),
-    Value,
+    ltr_mfs = Value,
     .keep = "none")
-
-mfs_ltr_long <- mfs_ltr_long |> 
-  mutate(
-    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c")
-  )
 
 
 # Eurostat Short term rates
-str_eurostat <- read_xlsx("str_eurostat.xlsx", sheet = 2, skip = 7, na = c("", "NA", ":"))
+
 
 str_eurostat_long <- str_eurostat |> 
   select(-starts_with("..")) |> 
@@ -897,86 +892,35 @@ str_eurostat_long <- str_eurostat |>
     .keep = "none"
   )
 
-# Merge OECD, IMF and Eurostat
-# Short term rates
-
-str_comb <- oecd_str |> 
-  full_join(mfs_str_long, by = c("iso3c", "Year")) |> 
-  full_join(str_eurostat_long, by = c("iso3c", "Year")) |> 
-  mutate(
-    ShortRate = coalesce(str_oecd, str_mfs, str_eurostat),
-    Year,
-    iso3c,
-    .keep = "none"
-    )
-
-
-# Long term rates
-
-ltr_combined <- full_join(
-  oecd_ltr,
-  mfs_ltr_long,
-  by = c("iso3c", "Year"),
-  suffix = c("_oecd", "_imf")
-) |>
-  mutate(
-    LongRate = coalesce(Value_oecd, Value_imf)
-  ) |>
-  select(iso3c, Year, LongRate)
-
-# Combine both rates
-interest_rates <- full_join(
-  str_comb,
-  ltr_combined,
-  by = c("iso3c", "Year")
-)
-
-# Add variables to panel
-panel <- left_join(panel, interest_rates,
-                                by = c("iso3c", "Year"))
 
 
 # IMF PFMH (Real government bond yield)
 
-pfmh_ltr <- read_xls("rltr_IMF_PFMH.xls", na = c("", "no data"))
-
-pfmh_ltr <- pfmh_ltr |> 
-  rename("Country" = `Real long term government bond yield, percent`) |> 
-  # Remove unnecessary column
-  select(-`Estimates start after`) |> 
-  # only keep country rows
-  slice(3:240)
-
-pfmh_ltr_long <- pfmh_ltr |> 
-  pivot_longer(
-    cols = !Country,
-    names_to = "Year",
-    values_to = "rltr"
-  ) |> 
-  mutate(
-    Year = as.integer(Year),
-    iso3c = countrycode(Country, origin = "country.name", destination = "iso3c"),
-    rltr,
-    .keep = "none"
+pfmh_ltr <- pfmh |> 
+  select(isocode, year, rltir) |> 
+  rename(
+    "iso3c" = isocode,
+    "Year" = year
   )
 
-panel <- left_join(panel, pfmh_ltr_long,
-                      by = c("iso3c", "Year"))
+# Merge all datasets
 
-# Approximate long term interest
-panel <- panel |> 
-  mutate(ltr_approx = rltr + inflation)
+ir_comb <- ir_oecd_long |> 
+  full_join(mfs_str_long, by = c("iso3c", "Year")) |> 
+  full_join(mfs_ltr_long, by = c("iso3c", "Year")) |> 
+  full_join(str_eurostat_long, by = c("iso3c", "Year")) |> 
+  full_join(pfmh_ltr, by = c("iso3c", "Year")) |> 
+  # Inflation for approximating long term nominal interest rate
+  full_join(panel |> select(Year, iso3c, inflation), by = c("iso3c", "Year")) |> 
+  mutate(
+    str = coalesce(str_oecd, str_mfs, str_eurostat),
+    ltr_approx = rltir + inflation,
+    ltr = coalesce(ltr_oecd, ltr_mfs, ltr_approx),
+    ycurve = ltr - str
+  )
 
-panel <- panel |> 
-  mutate(LongRateCompl = coalesce(LongRate, ltr_approx))
-
-
-
-# Construct the yield curve
-panel <- panel |> 
-  mutate(ycurve = LongRateCompl - ShortRate)
-
-
+# Add variables to panel
+panel <- left_join(panel, ir_comb |> select(iso3c, Year, ycurve), by = c("iso3c", "Year"))
 
 
 ## 2.11 Broad Money ========================================================
@@ -1281,15 +1225,13 @@ check <- panel |>
   )
 
 sort(colSums(check[,-1]), decreasing = T)
-sort(rowSums(check[,-1]), decreasing = T)
 
 panel |> 
-  select(cgdppriv, rgdp, inflation, nfa, bmgrowth, govcgdp, tloanspriv_growth, ltd, bmtr, cgdpcorp, cgdph) |> 
+  select(cgdppriv, rgdp, inflation, govcgdp, bcagdp, tloanspriv_growth, ltd, bmgrowth, nfa, bmgdp, bmtr, sp) |> 
   complete.cases() |> 
   sum()
 
 check |>
-  select(-(n_ShortRate:n_LongRateCompl)) |> 
   mutate(total_obs = rowSums(across(-Country), na.rm = TRUE)) |>
-  arrange(desc(total_obs)) |> View()
+  arrange(desc(total_obs))
 
