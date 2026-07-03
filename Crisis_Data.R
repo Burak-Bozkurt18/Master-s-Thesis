@@ -8,6 +8,31 @@ library(readxl)
 library(tidyverse)
 library(countrycode)
 
+# 1 Create functions =======================================================
+
+combine_longest_series <- function(data, indicator, sources) {
+  
+  counts <- data |>
+    filter(Year >= 1970, Year <= 2025) |>
+    group_by(iso3c) |>
+    summarise(
+      across(all_of(sources), ~sum(!is.na(.))),
+      .groups = "drop"
+    ) |>
+    rowwise() |>
+    mutate(source = sources[which.max(c_across(all_of(sources)))]) |>
+    ungroup() |>
+    select(iso3c, source)
+  
+  data |>
+    left_join(counts, by = "iso3c") |>
+    rowwise() |>
+    mutate(
+      !!indicator := get(source)
+    ) |>
+    ungroup()
+}
+
 # 2 Read and Clean Data ====================================================
 
 ## 2.1 Read Datasets =======================================================
@@ -190,7 +215,10 @@ wdi2_long <- wdi2 |>
   rename(
     "nfa" = `Net foreign assets (current LCU)`,
     "bcagdp_wdi" = `Current account balance (% of GDP)`,
-    "gdp" = `GDP (current LCU)`
+    "gdp" = `GDP (current LCU)`,
+    "cgdppriv" = `Domestic credit to private sector (% of GDP)`,
+    "bcgdpriv" = `Domestic credit to private sector by banks (% of GDP)`,
+    "trd" = `Total reserves (includes gold, current US$)`
   )
 
 # Jordà-Schularick-Taylor Macrohistory Database
@@ -299,9 +327,57 @@ panel <- panel |>
 
 ### 2.4.1 Nominal ======================================================
 
-# WDI
+# WEO
+gdp_weo <- weo_long |> 
+  filter(INDICATOR == "Gross domestic product (GDP), Current prices, Domestic currency") |> 
+  select(COUNTRY, Year, Value) |> 
+  mutate(
+    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
+    Year = as.integer(Year),
+    gdpbil = Value,
+    gdpmil = Value * 1000,
+    gdp = Value * 1000000000,
+    .keep = "none"
+  )
 
-panel <- left_join(panel, wdi2_long |> select(Year, iso3c, gdp) , by = c("iso3c", "Year"))
+# WDI
+gdp_wdi <- wdi2_long |> 
+  select(Year, iso3c, gdp) |> 
+  mutate(
+    gdpmil = gdp / 1000000,
+    gdpbil = gdp / 1000000000
+    )
+
+
+# Combine datasets
+gdp_comb <- gdp_weo |> 
+  full_join(gdp_wdi, by = c("iso3c", "Year"), suffix = c("_weo", "_wdi"))
+
+# Choose the longest series per country
+gdp <- combine_longest_series(
+  gdp_comb,
+  "gdp",
+  c("gdp_weo", "gdp_wdi")
+)
+
+gdpmil <- combine_longest_series(
+  gdp_comb,
+  "gdpmil",
+  c("gdpmil_weo", "gdpmil_wdi")
+)
+
+gdpbil <- combine_longest_series(
+  gdp_comb,
+  "gdpbil",
+  c("gdpbil_weo", "gdpbil_wdi")
+)
+
+
+# Add to panel
+panel <- left_join(panel, gdp |> select(iso3c, Year, gdp), by = c("iso3c", "Year"))
+panel <- left_join(panel, gdpmil |> select(iso3c, Year, gdpmil), by = c("iso3c", "Year"))
+panel <- left_join(panel, gdpbil |> select(iso3c, Year, gdpbil), by = c("iso3c", "Year"))
+
 
 ### 2.4.2 Real Growth ==================================================
 
@@ -320,31 +396,11 @@ rgdp_comb <- rgdp_pfmh |>
 
 # Choose the longest series per country
 
-counts <- rgdp_comb |> 
-  filter(Year >= "1970" & Year <= "2025") |> 
-  group_by(iso3c) |> 
-  summarise(
-    n_pfmh = sum(!is.na(rgc)),
-    n_afrreo = sum(!is.na(rgdpgrowth)),
-  ) |>
-  mutate(
-    source = case_when(
-      n_pfmh >= n_afrreo  ~ "pfmh",
-      TRUE            ~ "afrreo"
-    )
-  )
-
-rgdp_comb <- rgdp_comb |> 
-  left_join(counts |> select(iso3c, source), by = "iso3c")
-
-rgdp_comb <- rgdp_comb |> 
-  mutate(
-    rgdp = case_when(
-      source == "pfmh"    ~ rgc,
-      source == "afrreo"    ~ rgdpgrowth,
-    )
-  )
-
+rgdp_comb <- combine_longest_series(
+  rgdp_comb,
+  "rgdp",
+  c("rgc", "rgdpgrowth")
+)
 
 # Add to panel
 
@@ -422,40 +478,21 @@ cgdp_bis_long <- cgdp_bis |>
 cgdp_comb <- cgdp_bis_long |> 
   full_join(gdd_long |> select(cgdppriv, iso3c, Year), by = c("iso3c", "Year"), suffix = c("_bis", "_gdd")) |> 
   full_join(afrreo_long |> select(cgdppriv, iso3c, Year), by = c("iso3c", "Year")) |> 
-  rename(
-    "cgdppriv_afrreo" = cgdppriv
-  )
+  full_join(wdi2_long |> select(cgdppriv, iso3c, Year), by = c("iso3c", "Year"), suffix = c("_afrreo", "_wdi"))
 
 
 # Choose the longest series per country
 
-counts <- cgdp_comb |> 
-  filter(Year >= "1970" & Year <= "2025") |> 
-  group_by(iso3c) |> 
-  summarise(
-    n_bis = sum(!is.na(cgdppriv_bis)),
-    n_gdd = sum(!is.na(cgdppriv_gdd)),
-    n_afr = sum(!is.na(cgdppriv_afrreo))
-  ) |>
-  mutate(
-    source = case_when(
-      n_bis >= n_gdd & n_bis >= n_afr ~ "bis",
-      n_gdd >= n_afr                  ~ "gdd",
-      TRUE                            ~ "afrreo"
-    )
+cgdp_comb <- combine_longest_series(
+  cgdp_comb,
+  "cgdppriv",
+  c(
+    "cgdppriv_bis",
+    "cgdppriv_gdd",
+    "cgdppriv_afrreo",
+    "cgdppriv_wdi"
   )
-
-cgdp_comb <- cgdp_comb |> 
-  left_join(counts |> select(iso3c, source), by = "iso3c")
-
-cgdp_comb <- cgdp_comb |> 
-  mutate(
-    cgdppriv = case_when(
-      source == "bis"    ~ cgdppriv_bis,
-      source == "gdd"    ~ cgdppriv_gdd,
-      source == "afrreo" ~ cgdppriv_afrreo
-    )
-  )
+)
 
 # Add data to panel
 panel <- left_join(panel, cgdp_comb |> select(iso3c, Year, cgdppriv), by = c("iso3c", "Year"))
@@ -466,11 +503,11 @@ panel <- left_join(panel, gdd_long |> select(iso3c, Year, cgdpcorp, cgdph), by =
 
 # Create approximated credit column
 credit_approx <- panel |> 
-  select(iso3c, Year, cgdppriv, cgdpcorp, cgdph, gdp) |> 
+  select(iso3c, Year, cgdppriv, cgdpcorp, cgdph, gdpbil) |> 
   mutate(
-    tloanspriv_approx = cgdppriv / 100 * gdp,
-    tloanscorp_approx = cgdpcorp / 100 * gdp,
-    tloansh_approx = cgdph / 100 * gdp,
+    tloanspriv_approx = cgdppriv / 100 * gdpbil,
+    tloanscorp_approx = cgdpcorp / 100 * gdpbil,
+    tloansh_approx = cgdph / 100 * gdpbil,
     Year,
     iso3c,
     .keep = "none"
@@ -544,34 +581,16 @@ govcgdp_pfmh <- pfmh |>
 govcgdp_comb <- govcgdp_gdd |> 
   full_join(govcgdp_pfmh, by = c("iso3c", "Year"))
 
-
 # Choose the longest series per country
 
-counts <- govcgdp_comb |> 
-  filter(Year >= "1970" & Year <= "2025") |> 
-  group_by(iso3c) |> 
-  summarise(
-    n_pfmh = sum(!is.na(govcgdp_pfmh)),
-    n_gdd = sum(!is.na(govcgdp_gdd)),
-  ) |>
-  mutate(
-    source = case_when(
-      n_pfmh >= n_gdd  ~ "pfmh",
-      TRUE            ~ "gdd"
-    )
+govcgdp_comb <- combine_longest_series(
+  govcgdp_comb,
+  "govcgdp",
+  c(
+    "govcgdp_pfmh",
+    "govcgdp_gdd"
   )
-
-govcgdp_comb <- govcgdp_comb |> 
-  left_join(counts |> select(iso3c, source), by = "iso3c")
-
-govcgdp_comb <- govcgdp_comb |> 
-  mutate(
-    govcgdp = case_when(
-      source == "pfmh"    ~ govcgdp_pfmh,
-      source == "gdd"    ~ govcgdp_gdd,
-    )
-  )
-
+)
 
 # Add to panel
 
@@ -624,30 +643,14 @@ infl_combined <- bis_cpi_long |>
 
 # Choose the longest series per country
 
-counts <- infl_combined |> 
-  filter(Year >= "1970" & Year <= "2025") |> 
-  group_by(iso3c) |> 
-  summarise(
-    n_bis = sum(!is.na(inflation_bis)),
-    n_weo = sum(!is.na(inflation_weo)),
-  ) |>
-  mutate(
-    source = case_when(
-      n_bis >= n_weo  ~ "bis",
-      TRUE            ~ "weo"
-    )
+infl_combined <- combine_longest_series(
+  infl_combined,
+  "inflation",
+  c(
+    "inflation_bis",
+    "inflation_weo"
   )
-
-infl_combined <- infl_combined |> 
-  left_join(counts |> select(iso3c, source), by = "iso3c")
-
-infl_combined <- infl_combined |> 
-  mutate(
-    inflation = case_when(
-      source == "bis"    ~ inflation_bis,
-      source == "weo"    ~ inflation_weo,
-    )
-  )
+)
 
 
 # Add to panel
@@ -678,30 +681,14 @@ bca_comb <- bca_wdi_long |>
 
 # Choose the longest series per country
 
-counts <- bca_comb |> 
-  filter(Year >= "1970" & Year <= "2025") |> 
-  group_by(iso3c) |> 
-  summarise(
-    n_wdi = sum(!is.na(bcagdp_wdi)),
-    n_weo = sum(!is.na(bca_weo)),
-  ) |>
-  mutate(
-    source = case_when(
-      n_weo >= n_wdi  ~ "weo",
-      TRUE            ~ "wdi"
-    )
+bca_comb <- combine_longest_series(
+  bca_comb,
+  "bcagdp",
+  c(
+    "bcagdp_wdi",
+    "bca_weo"
   )
-
-bca_comb <- bca_comb |> 
-  left_join(counts |> select(iso3c, source), by = "iso3c")
-
-bca_comb <- bca_comb |> 
-  mutate(
-    bcagdp = case_when(
-      source == "weo"    ~ bca_weo,
-      source == "wdi"    ~ bcagdp_wdi,
-    )
-  )
+)
 
 # Add to panel
 panel <- left_join(panel, bca_comb |> select(iso3c, Year, bcagdp), by = c("iso3c", "Year"))
@@ -774,30 +761,16 @@ nfa_combined <- full_join(
 
 # Choose the longest series per country
 
-counts <- nfa_combined |> 
-  filter(Year >= "1970" & Year <= "2025") |> 
-  group_by(iso3c) |> 
-  summarise(
-    n_mfs = sum(!is.na(nfa_mfs)),
-    n_wdi = sum(!is.na(nfa_wdi)),
-  ) |>
-  mutate(
-    source = case_when(
-      n_mfs >= n_wdi  ~ "mfs",
-      TRUE            ~ "wdi"
-    )
+nfa_combined <- combine_longest_series(
+  nfa_combined,
+  "nfa",
+  c(
+    "nfa_mfs",
+    "nfa_wdi"
   )
+)
 
-nfa_combined <- nfa_combined |> 
-  left_join(counts |> select(iso3c, source), by = "iso3c")
 
-nfa_combined <- nfa_combined |> 
-  mutate(
-    nfa = case_when(
-      source == "mfs"    ~ nfa_mfs,
-      source == "wdi"    ~ nfa_wdi,
-    )
-  )
 
 # Add to panel
 
@@ -964,34 +937,27 @@ bmoney_combined <- bmoney_mfs_long |>
   )
 
 # Choose the longest series per country
+bmoney_combined <- combine_longest_series(
+  bmoney_combined,
+  "bmoney",
+  c(
+    "bmoney_mfs",
+    "bmoney_wdi",
+    "bmoney_jst"
+  )
+)
 
-counts <- bmoney_combined |> 
-  filter(Year >= "1970" & Year <= "2025") |> 
-  group_by(iso3c) |> 
-  summarise(
-    n_mfs = sum(!is.na(bmoney_mfs)),
-    n_wdi = sum(!is.na(bmoney_wdi)),
-    n_jst = sum(!is.na(bmoney_jst))
-  ) |>
+# Rescale the JST broad money values for CAN, FRA, DEU and ITA from billions to millions 
+bmoney_combined <- bmoney_combined |>
   mutate(
-    source = case_when(
-      n_mfs >= n_wdi & n_mfs >= n_jst ~ "mfs",
-      n_wdi >= n_jst ~ "wdi",
-      TRUE            ~ "jst"
+    bmoney = if_else(
+      source == "bmoney_jst" &
+        iso3c %in% c("CAN", "FRA", "DEU", "ITA"),
+      bmoney * 1000,
+      bmoney
     )
   )
 
-bmoney_combined <- bmoney_combined |> 
-  left_join(counts |> select(iso3c, source), by = "iso3c")
-
-bmoney_combined <- bmoney_combined |> 
-  mutate(
-    bmoney = case_when(
-      source == "mfs"    ~ bmoney_mfs,
-      source == "wdi"    ~ bmoney_wdi,
-      source == "jst"    ~ bmoney_jst
-    )
-  )
 
 # Calculate broad money growth rate
 
@@ -1058,37 +1024,17 @@ ltd_comb <- ltd_mfs_long |>
   full_join(ltd_jst, by = c("iso3c", "Year")) |> 
   rename("ltd_jst" = ltd)
 
-
 # Choose the longest series per country
 
-counts <- ltd_comb |> 
-  filter(Year >= "1970" & Year <= "2025") |> 
-  group_by(iso3c) |> 
-  summarise(
-    n_mfs = sum(!is.na(ltd_mfs)),
-    n_gfd = sum(!is.na(ltd_gfd)),
-    n_jst = sum(!is.na(ltd_jst))
-  ) |>
-  mutate(
-    source = case_when(
-      n_mfs >= n_gfd & n_mfs >= n_jst ~ "mfs",
-      n_gfd >= n_jst ~ "gfd",
-      TRUE            ~ "jst"
-    )
+ltd_comb <- combine_longest_series(
+  ltd_comb,
+  "ltd",
+  c(
+    "ltd_mfs",
+    "ltd_gfd",
+    "ltd_jst"
   )
-
-ltd_comb <- ltd_comb |> 
-  left_join(counts |> select(iso3c, source), by = "iso3c")
-
-ltd_comb <- ltd_comb |> 
-  mutate(
-    ltd = case_when(
-      source == "mfs"    ~ ltd_mfs,
-      source == "gfd"    ~ ltd_gfd,
-      source == "jst"    ~ ltd_jst
-    )
-  )
-
+)
 
 # Add to panel
 
@@ -1134,79 +1080,44 @@ sp_mfs_long <- sp_mfs |>
     .keep = "none")
 
 # Choose the longest mfs share price series (period avrg. vs end-of-period)
-counts <- sp_mfs_long |> 
-  filter(Year >= "1970" & Year <= "2025") |> 
-  group_by(iso3c) |> 
-  summarise(
-    n_sppa = sum(!is.na(sppa)),
-    n_speop = sum(!is.na(speop))
-  ) |>
-  mutate(
-    source = case_when(
-      n_sppa >= n_speop ~ "sppa",
-      TRUE            ~ "speop"
-    )
-  )
 
-sp_mfs_long <- sp_mfs_long |> 
-  left_join(counts |> select(iso3c, source), by = "iso3c")
-
-sp_mfs_long <- sp_mfs_long |> 
-  mutate(
-    sp = case_when(
-      source == "sppa"    ~ sppa,
-      source == "speop"    ~ speop,
-    )
+sp_mfs_long <- combine_longest_series(
+  sp_mfs_long,
+  "sp",
+  c(
+    "sppa",
+    "speop"
   )
+)
 
 # Combine datasets
 sp_comb <- sp_oecd_long |> 
   full_join(sp_mfs_long |> select(Year, iso3c, sp), by = c("iso3c", "Year"), suffix = c("_oecd", "_mfs"))
 
-# Choose the longest series
-counts <- sp_comb |> 
-  filter(Year >= "1970" & Year <= "2025") |> 
-  group_by(iso3c) |> 
-  summarise(
-    n_oecd = sum(!is.na(sp_oecd)),
-    n_mfs = sum(!is.na(sp_mfs))
-  ) |>
-  mutate(
-    source = case_when(
-      n_oecd >= n_mfs ~ "oecd",
-      TRUE            ~ "mfs"
-    )
-  )
-
-sp_comb <- sp_comb |> 
-  left_join(counts |> select(iso3c, source), by = "iso3c")
-
 # Rebase the MFS series
 # IMF -> 2015 = 100
 
 base2015 <- sp_comb |>
-  filter(source == "mfs", Year == 2015) |>
+  filter(Year == 2015) |>
   select(iso3c, base2015 = sp_mfs)
 
 sp_comb <- sp_comb |>
   left_join(base2015, by = "iso3c") |>
   mutate(
-    sp_mfs2015 = if_else(
-      source == "mfs",
-      sp_mfs / base2015 * 100,
-      NA_real_
-    )
+    sp_mfs2015 = sp_mfs / base2015 * 100
   ) |>
   select(-base2015)
 
+# Choose the longest series
 
-sp_comb <- sp_comb |> 
-  mutate(
-    sp = case_when(
-      source == "oecd"    ~ sp_oecd,
-      source == "mfs"    ~ sp_mfs2015,
-    )
+sp_comb <- combine_longest_series(
+  sp_comb,
+  "sp",
+  c(
+    "sp_oecd",
+    "sp_mfs2015"
   )
+)
 
 # Add to panel
 panel <- left_join(panel, sp_comb |> select(iso3c, Year, sp), by = c("iso3c", "Year"))
