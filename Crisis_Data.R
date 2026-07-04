@@ -164,7 +164,7 @@ sp_mfs <- read_csv("sp_mfs.csv")
 sp_oecd <- read_xlsx("sp_oecd.xlsx", skip = 5)
 ir_oecd <- read_xlsx("OECD_STIR_LTIR.xlsx", skip = 3)
 
-# World Development Indicators
+# World Bank - World Development Indicators
 wdi1 <- read_csv("wdi1.csv", na = c("", "NA", ".."))
 wdi2 <- read_csv("wdi2.csv", na = c("", "NA", ".."))
 
@@ -219,6 +219,30 @@ wdi2_long <- wdi2 |>
     "cgdppriv" = `Domestic credit to private sector (% of GDP)`,
     "bcgdpriv" = `Domestic credit to private sector by banks (% of GDP)`,
     "trd" = `Total reserves (includes gold, current US$)`
+  )
+
+# World Bank - Global Financial Development
+gfd <- read_csv("gfd.csv", na = c("", "NA", ".."), locale = locale(encoding = "Latin1"))
+
+gfd_long <-  gfd |>
+  # Remove last five rows
+  slice_head(n = -5) |>  
+  pivot_longer(
+    cols = !(`Country Name`:`Series Code`),
+    names_to = "Year",
+    values_to = "Value"
+  ) |> 
+  select(`Country Code`, `Series Name`, Year, Value) |> 
+  pivot_wider(
+    names_from = `Series Name`,
+    values_from = Value
+  ) |> 
+  mutate(
+    iso3c = `Country Code`,
+    Year = as.integer(str_extract(Year, "^\\d{4}")),
+    spr = `Stock market return (%, year-on-year)`,
+    ltd = `Bank credit to bank deposits (%)`,
+    .keep = "none"
   )
 
 # Jordà-Schularick-Taylor Macrohistory Database
@@ -776,6 +800,10 @@ nfa_combined <- combine_longest_series(
 
 panel <- left_join(panel, nfa_combined |> select(Year, iso3c, nfa), by = c("iso3c", "Year"))
 
+# Compute NFA-to-GDP ratio
+panel <- panel |> 
+  mutate(nfagdp = (nfa / gdpmil) * 100)
+
 ## 2.10 Yield curve ===================================
 
 # OECD
@@ -977,22 +1005,7 @@ panel <- left_join(panel, bmoney_combined |> select(Year, iso3c, bmoney, bmtr, b
 
 ## 2.12 Loans-to-deposit ratio ===============================================
 
-ltd_gfd <- read_csv("loans_to_deposit_gfd.csv", na = c("", "NA", ".."), locale = locale(encoding = "Latin1"))
-
-
-ltd_gfd_long <- ltd_gfd |> 
-  slice(11:225) |> 
-  pivot_longer(
-    cols = !(`Series Name`:`Country Code`),
-    names_to = "Year",
-    values_to = "ltd"
-  ) |> 
-  mutate(
-    iso3c = `Country Code`,
-    Year = as.integer(str_extract(Year, "^\\d{4}")),
-    ltd,
-    .keep = "none"
-  )
+ltd_gfd_long <- gfd_long |> select(Year, iso3c, ltd)
 
 ltd_mfs_long <- ltd_mfs |> 
   pivot_longer(
@@ -1043,6 +1056,9 @@ panel <- left_join(panel, ltd_comb |> select(iso3c, Year, ltd), by = c("iso3c", 
 
 ## 2.13 Share prices =========================================================
 
+# GFD
+spr_gfd <- gfd_long |> select(Year, iso3c, spr) |> rename("spr_gfd" = spr)
+
 # OECD
 sp_oecd_long <- sp_oecd |> 
   slice(2:49) |> 
@@ -1092,35 +1108,54 @@ sp_mfs_long <- combine_longest_series(
 
 # Combine datasets
 sp_comb <- sp_oecd_long |> 
-  full_join(sp_mfs_long |> select(Year, iso3c, sp), by = c("iso3c", "Year"), suffix = c("_oecd", "_mfs"))
+  full_join(sp_mfs_long |> select(Year, iso3c, sp), by = c("iso3c", "Year"), suffix = c("_oecd", "_mfs")) |> 
+  full_join(spr_gfd, by = c("iso3c", "Year"))
+
+# Calculate returns
+sp_comb <- sp_comb |> 
+  group_by(iso3c) |> 
+  mutate(
+    spr_oecd = (log(sp_oecd) - lag(log(sp_oecd))) * 100,
+    spr_mfs = (log(sp_mfs) - lag(log(sp_mfs))) * 100
+  )
+
+country_corr <- sp_comb |> 
+  group_by(iso3c) |> 
+  summarise(
+    cor_oecd_mfs =
+      if(sum(!is.na(spr_oecd) & !is.na(spr_mfs)) >= 5)
+        cor(spr_oecd, spr_mfs, use = "complete.obs")
+    else NA_real_
+  )
 
 # Rebase the MFS series
 # IMF -> 2015 = 100
 
-base2015 <- sp_comb |>
-  filter(Year == 2015) |>
-  select(iso3c, base2015 = sp_mfs)
-
-sp_comb <- sp_comb |>
-  left_join(base2015, by = "iso3c") |>
-  mutate(
-    sp_mfs2015 = sp_mfs / base2015 * 100
-  ) |>
-  select(-base2015)
+# base2015 <- sp_comb |>
+#   filter(Year == 2015) |>
+#   select(iso3c, base2015 = sp_mfs)
+# 
+# sp_comb <- sp_comb |>
+#   left_join(base2015, by = "iso3c") |>
+#   mutate(
+#     sp_mfs2015 = sp_mfs / base2015 * 100
+#   ) |>
+#   select(-base2015)
 
 # Choose the longest series
 
 sp_comb <- combine_longest_series(
   sp_comb,
-  "sp",
+  "spr",
   c(
-    "sp_oecd",
-    "sp_mfs2015"
+    "spr_oecd",
+    "spr_mfs",
+    "spr_gfd"
   )
 )
 
 # Add to panel
-panel <- left_join(panel, sp_comb |> select(iso3c, Year, sp), by = c("iso3c", "Year"))
+panel <- left_join(panel, sp_comb |> select(iso3c, Year, spr), by = c("iso3c", "Year"))
 
 
 ## 2.14 Check how many obs ===================================================
@@ -1138,7 +1173,7 @@ check <- panel |>
 sort(colSums(check[,-1]), decreasing = T)
 
 panel |> 
-  select(cgdppriv, rgdp, inflation, govcgdp, bcagdp, tloanspriv_growth, ltd, bmgrowth, nfa, bmgdp, bmtr, sp) |> 
+  select(cgdppriv, rgdp, inflation, govcgdp, bcagdp, ltd, bmgrowth, nfagdp) |> 
   complete.cases() |> 
   sum()
 
