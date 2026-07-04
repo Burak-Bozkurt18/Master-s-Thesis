@@ -1188,7 +1188,7 @@ check <- panel |>
   group_by(Country) |>
   summarise(
     across(
-      - (Year:iso3c),
+      - (Year:PreCrisis4),
       ~ sum(!is.na(.x)),
       .names = "n_{.col}"
     )
@@ -1197,11 +1197,21 @@ check <- panel |>
 sort(colSums(check[,-1]), decreasing = T)
 
 panel |> 
-  select(cgdppriv, rgdp, inflation, govcgdp, bcagdp, ltd, bmgrowth, nfagdp) |> 
+  select(cgdppriv, rgdp, inflation, govcgdp, bcagdp, bmgrowth, ltd, nfagdp, spr) |> 
   complete.cases() |> 
   sum()
 
-check |>
-  mutate(total_obs = rowSums(across(-Country), na.rm = TRUE)) |>
-  arrange(desc(total_obs))
+predictors <- c(
+  "cgdppriv", "rgdp", "inflation", "govcgdp", "bcagdp", "bmgrowth", "ltd"
+)
 
+panel_complete <- panel |> 
+  filter(if_all(all_of(predictors), ~ !is.na(.)))
+
+panel_complete |> 
+  summarize(
+    n_crisisstart = sum(Crisis_Start),
+    n_precrisis2 = sum(PreCrisis2),
+    n_precrisis3 = sum(PreCrisis3),
+    n_precrisis4 = sum(PreCrisis4)
+  )
