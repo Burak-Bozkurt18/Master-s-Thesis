@@ -327,6 +327,9 @@ panel <- expand_grid(
   Year = 1970:2025
 )
 
+# Add country codes
+panel <- panel |> 
+  mutate(iso3c = countrycode(Country, origin = "country.name", destination = "iso3c"))
 
 panel <- panel |> 
   left_join(crisis_years,
@@ -342,10 +345,31 @@ panel <- panel |>
     Crisis_Start = replace_na(Crisis_Start, 0)
   )
 
-# Add country codes
+# Pre-Crisis indicator
+panel <- panel |>
+  group_by(Country) |>
+  arrange(Year) |>
+  mutate(
+    PreCrisis2 = as.integer(
+      lead(Crisis_Start, 1, default = 0) +
+        lead(Crisis_Start, 2, default = 0) > 0
+    ),
+    PreCrisis3 = as.integer(
+      lead(Crisis_Start, 1, default = 0) +
+        lead(Crisis_Start, 2, default = 0) +
+        lead(Crisis_Start, 3, default = 0) > 0
+    ),
+    PreCrisis4 = as.integer(
+      lead(Crisis_Start, 1, default = 0) +
+        lead(Crisis_Start, 2, default = 0) +
+        lead(Crisis_Start, 3, default = 0) + 
+        lead(Crisis_Start, 4, default = 0) > 0
+    )
+  ) |>
+  ungroup() |> 
+  arrange(Country)
 
-panel <- panel |> 
-  mutate(iso3c = countrycode(Country, origin = "country.name", destination = "iso3c"))
+
 
 ## 2.4 GDP =============================================================
 
