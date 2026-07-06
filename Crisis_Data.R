@@ -242,6 +242,7 @@ gfd_long <-  gfd |>
     Year = as.integer(str_extract(Year, "^\\d{4}")),
     spr = `Stock market return (%, year-on-year)`,
     ltd = `Bank credit to bank deposits (%)`,
+    bmgdp = `Liquid liabilities to GDP (%)`,
     .keep = "none"
   )
 
@@ -977,10 +978,14 @@ bmoney_jst <- jst |>
     "Year" = year
     )
 
+bmgdp_gfd <- gfd_long |> select(Year, iso3c, bmgdp)
+
+
 # Combine datasets
 
 bmoney_combined <- bmoney_mfs_long |> 
   full_join(bmoney_wdi_long, by = c("iso3c", "Year"), suffix = c("_mfs", "_wdi")) |>
+  full_join(bmgdp_gfd, by = c("iso3c", "Year"), suffix = c("_wdi", "_gfd")) |> 
   full_join(bmoney_jst, by = c("iso3c", "Year")) |> 
   rename(
     "bmoney_mfs" = bmoney,
@@ -989,7 +994,7 @@ bmoney_combined <- bmoney_mfs_long |>
   )
 
 # Choose the longest series per country
-bmoney_combined <- combine_longest_series(
+bmoney <- combine_longest_series(
   bmoney_combined,
   "bmoney",
   c(
@@ -999,8 +1004,17 @@ bmoney_combined <- combine_longest_series(
   )
 )
 
+bmgdp <- combine_longest_series(
+  bmoney_combined,
+  "bmgdp",
+  c(
+    "bmgdp_wdi",
+    "bmgdp_gfd"
+  )
+)
+
 # Rescale the JST broad money values for CAN, FRA, DEU and ITA from billions to millions 
-bmoney_combined <- bmoney_combined |>
+bmoney <- bmoney |>
   mutate(
     bmoney = if_else(
       source == "bmoney_jst" &
@@ -1013,7 +1027,7 @@ bmoney_combined <- bmoney_combined |>
 
 # Calculate broad money growth rate
 
-bmoney_combined <- bmoney_combined |>
+bmoney <- bmoney |>
   arrange(iso3c, Year) |>
   group_by(iso3c) |>
   mutate(
@@ -1023,8 +1037,9 @@ bmoney_combined <- bmoney_combined |>
 
 # Add to panel
 
-panel <- left_join(panel, bmoney_combined |> select(Year, iso3c, bmoney, bmtr, bmgrowth, bmgdp),
+panel <- left_join(panel, bmoney |> select(Year, iso3c, bmoney, bmtr, bmgrowth),
                       by = c("iso3c", "Year"))
+panel <- left_join(panel, bmgdp |> select(Year, iso3c, bmgdp), by = c("iso3c", "Year"))
 
 
 ## 2.12 Loans-to-deposit ratio ===============================================
