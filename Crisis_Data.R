@@ -1217,15 +1217,14 @@ panel |>
   sum()
 
 predictors <- c(
-  "cgdppriv", "rgdp", "inflation", "govcgdp", "bcagdp", "bmgrowth", "ltd"
+  "cgdppriv", "rgdp", "inflation", "govcgdp", "bcagdp", "bmgdp", "ltd", "nfagdp"
 )
 
 panel_complete <- panel |> 
-  filter(if_all(all_of(predictors), ~ !is.na(.)))
+  filter(if_all(all_of(predictors), ~ !is.na(.)), Crisis != 1) 
 
 panel_complete |> 
   summarize(
-    n_crisisstart = sum(Crisis_Start),
     n_precrisis2 = sum(PreCrisis2),
     n_precrisis3 = sum(PreCrisis3),
     n_precrisis4 = sum(PreCrisis4)
