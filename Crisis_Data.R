@@ -169,7 +169,7 @@ wdi1 <- read_csv("wdi1.csv", na = c("", "NA", ".."))
 wdi2 <- read_csv("wdi2.csv", na = c("", "NA", ".."))
 
 wdi1_long <- wdi1 |> 
-  slice(1:748) |> 
+  slice_head(n = -5) |> 
   pivot_longer(
     cols = !(`Country Name`:`Series Code`),
     names_to = "Year",
@@ -195,7 +195,7 @@ wdi1_long <- wdi1 |>
   
 
 wdi2_long <- wdi2 |> 
-  slice(1:561) |> 
+  slice_head(n = -5) |> 
   pivot_longer(
     cols = !(`Country Name`:`Series Code`),
     names_to = "Year",
@@ -1212,7 +1212,7 @@ check <- panel |>
 sort(colSums(check[,-1]), decreasing = T)
 
 panel |> 
-  select(cgdppriv, rgdp, inflation, govcgdp, bcagdp, bmgrowth, ltd, nfagdp, spr) |> 
+  select(cgdppriv, rgdp, inflation, govcgdp, bcagdp, bmgrowth, ltd, nfagdp) |> 
   complete.cases() |> 
   sum()
 
