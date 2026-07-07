@@ -125,6 +125,31 @@ afrreo_long <- afrreo |>
     .keep = "none"
   )
 
+# IMF Middle East and Central Asia Regional Economic Outlook (MCDREO)
+mcdreo <- read_csv("mcdreo.csv")
+
+mcdreo_long <- mcdreo |> 
+  pivot_longer(
+    cols = !(DATASET:SCALE),
+    names_to = "Year",
+    values_to = "Value"
+  ) |> 
+  select(COUNTRY, INDICATOR, Year, Value) |> 
+  pivot_wider(
+    names_from = INDICATOR,
+    values_from = Value
+  ) |> 
+  mutate(
+    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
+    Year = as.integer(Year),
+    inflation = `All Items, Consumer price index (CPI), Period average, percent change`,
+    govcgdp = `Gross debt, General government, Percent of GDP`,
+    bcagdp = `Current account balance (credit less debit), Percent of GDP`,
+    bmgrowth = `Broad money, Percent change`,
+    rgdp = `Gross domestic product (GDP), Constant prices, Percent change`,
+    .keep = "none"
+  )
+
 # IMF World Economic Outlook
 weo <- read_csv("WEO.csv")
 
@@ -159,6 +184,29 @@ mfs_ltr <- read_csv("IMF_MFS_LTR.csv")
 bmoney_mfs <- read_csv("IMF_MFS_BroadMoney.csv")
 ltd_mfs <- read_csv("loans_to_deposit_mfs.csv")
 sp_mfs <- read_csv("sp_mfs.csv")
+
+# IMF - National Economic Accounts (NEA)
+nea <- read_csv("nea.csv")
+
+nea_long <- nea |> 
+  pivot_longer(
+    cols = !(DATASET:SCALE),
+    names_to = "Year",
+    values_to = "Value"
+  ) |> 
+  select(COUNTRY, PRICE_TYPE, Year, Value) |> 
+  pivot_wider(
+    names_from = PRICE_TYPE,
+    values_from = Value
+  ) |> 
+  mutate(
+    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
+    Year = as.integer(Year),
+    ngdp = `Current prices`,
+    rgdp = `Constant prices`,
+    .keep = "none"
+  ) |> 
+  filter(!is.na(iso3c))
 
 # OECD
 sp_oecd <- read_xlsx("sp_oecd.xlsx", skip = 5)
@@ -215,7 +263,7 @@ wdi2_long <- wdi2 |>
   rename(
     "nfa" = `Net foreign assets (current LCU)`,
     "bcagdp_wdi" = `Current account balance (% of GDP)`,
-    "gdp" = `GDP (current LCU)`,
+    "ngdp" = `GDP (current LCU)`,
     "cgdppriv" = `Domestic credit to private sector (% of GDP)`,
     "bcgdpriv" = `Domestic credit to private sector by banks (% of GDP)`,
     "trd" = `Total reserves (includes gold, current US$)`
@@ -376,6 +424,14 @@ panel <- panel |>
 
 ### 2.4.1 Nominal ======================================================
 
+# NEA
+gdp_nea <- nea_long |> 
+  select(-rgdp) |> 
+  mutate(
+    ngdpmil = ngdp / 1000000,
+    ngdpbil = ngdp / 1000000000
+  )
+  
 # WEO
 gdp_weo <- weo_long |> 
   filter(INDICATOR == "Gross domestic product (GDP), Current prices, Domestic currency") |> 
@@ -383,77 +439,91 @@ gdp_weo <- weo_long |>
   mutate(
     iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
     Year = as.integer(Year),
-    gdpbil = Value,
-    gdpmil = Value * 1000,
-    gdp = Value * 1000000000,
+    ngdpbil = Value,
+    ngdpmil = Value * 1000,
+    ngdp = Value * 1000000000,
     .keep = "none"
   )
 
 # WDI
 gdp_wdi <- wdi2_long |> 
-  select(Year, iso3c, gdp) |> 
+  select(Year, iso3c, ngdp) |> 
   mutate(
-    gdpmil = gdp / 1000000,
-    gdpbil = gdp / 1000000000
+    ngdpmil = ngdp / 1000000,
+    ngdpbil = ngdp / 1000000000
     )
 
 
 # Combine datasets
-gdp_comb <- gdp_weo |> 
-  full_join(gdp_wdi, by = c("iso3c", "Year"), suffix = c("_weo", "_wdi"))
+gdp_comb <- gdp_nea |> 
+  full_join(gdp_weo, by = c("iso3c", "Year"), suffix = c("_nea", "_weo")) |> 
+  full_join(gdp_wdi, by = c("iso3c", "Year")) |> 
+  rename(
+    "ngdp_wdi" = ngdp,
+    "ngdpmil_wdi" = ngdpmil,
+    "ngdpbil_wdi" = ngdpbil
+  )
 
 # Choose the longest series per country
-gdp <- combine_longest_series(
+ngdp <- combine_longest_series(
   gdp_comb,
-  "gdp",
-  c("gdp_weo", "gdp_wdi")
+  "ngdp",
+  c("ngdp_nea", "ngdp_weo", "ngdp_wdi")
 )
 
-gdpmil <- combine_longest_series(
+ngdpmil <- combine_longest_series(
   gdp_comb,
-  "gdpmil",
-  c("gdpmil_weo", "gdpmil_wdi")
+  "ngdpmil",
+  c("ngdp_nea", "ngdpmil_weo", "ngdpmil_wdi")
 )
 
-gdpbil <- combine_longest_series(
+ngdpbil <- combine_longest_series(
   gdp_comb,
-  "gdpbil",
-  c("gdpbil_weo", "gdpbil_wdi")
+  "ngdpbil",
+  c("ngdpbil_nea", "ngdpbil_weo", "ngdpbil_wdi")
 )
 
 
 # Add to panel
-panel <- left_join(panel, gdp |> select(iso3c, Year, gdp), by = c("iso3c", "Year"))
-panel <- left_join(panel, gdpmil |> select(iso3c, Year, gdpmil), by = c("iso3c", "Year"))
-panel <- left_join(panel, gdpbil |> select(iso3c, Year, gdpbil), by = c("iso3c", "Year"))
+panel <- left_join(panel, ngdp |> select(iso3c, Year, ngdp), by = c("iso3c", "Year"))
+panel <- left_join(panel, ngdpmil |> select(iso3c, Year, ngdpmil), by = c("iso3c", "Year"))
+panel <- left_join(panel, ngdpbil |> select(iso3c, Year, ngdpbil), by = c("iso3c", "Year"))
 
 
 ### 2.4.2 Real Growth ==================================================
+
+rgdp_nea <- nea_long |> 
+  select(-ngdp) |> 
+  group_by(iso3c) |> 
+  mutate(rgdpgrowth = (log(rgdp) - lag(log(rgdp))) * 100)
 
 rgdp_pfmh <- pfmh |> 
   select(isocode, year, rgc) |> 
   rename(
     "iso3c" = isocode,
-    "Year" = year
+    "Year" = year,
+    "rgdpgrowth" = rgc
   )
 
 rgdp_afrreo <- afrreo_long |> select(iso3c, Year, rgdpgrowth)
 
 # Combine datasets
-rgdp_comb <- rgdp_pfmh |> 
-  full_join(rgdp_afrreo, by = c("iso3c", "Year"))
+rgdp_comb <- rgdp_nea |> 
+  full_join(rgdp_pfmh, by = c("iso3c", "Year"), suffix = c("_nea", "_pfmh")) |> 
+  full_join(rgdp_afrreo, by = c("iso3c", "Year")) |> 
+  rename("rgdpgrowth_afrreo" = "rgdpgrowth")
 
 # Choose the longest series per country
 
 rgdp_comb <- combine_longest_series(
   rgdp_comb,
-  "rgdp",
-  c("rgc", "rgdpgrowth")
+  "rgdpgrowth",
+  c("rgdpgrowth_nea", "rgdpgrowth_pfmh", "rgdpgrowth_afrreo")
 )
 
 # Add to panel
 
-panel <- left_join(panel, rgdp_comb |> select(iso3c, Year, rgdp), by = c("iso3c", "Year"))
+panel <- left_join(panel, rgdp_comb |> select(iso3c, Year, rgdpgrowth), by = c("iso3c", "Year"))
 
 
 
@@ -552,11 +622,11 @@ panel <- left_join(panel, gdd_long |> select(iso3c, Year, cgdpcorp, cgdph), by =
 
 # Create approximated credit column
 credit_approx <- panel |> 
-  select(iso3c, Year, cgdppriv, cgdpcorp, cgdph, gdpbil) |> 
+  select(iso3c, Year, cgdppriv, cgdpcorp, cgdph, ngdpbil) |> 
   mutate(
-    tloanspriv_approx = cgdppriv / 100 * gdpbil,
-    tloanscorp_approx = cgdpcorp / 100 * gdpbil,
-    tloansh_approx = cgdph / 100 * gdpbil,
+    tloanspriv_approx = cgdppriv / 100 * ngdpbil,
+    tloanscorp_approx = cgdpcorp / 100 * ngdpbil,
+    tloansh_approx = cgdph / 100 * ngdpbil,
     Year,
     iso3c,
     .keep = "none"
@@ -611,6 +681,21 @@ panel <- panel |>
 
 ### 2.5.2 Public Debt =================================================
 
+govcgdp_weo <- weo_long |> 
+  filter(INDICATOR == "Gross debt, General government, Percent of GDP") |> 
+  select(COUNTRY, INDICATOR, Year, Value) |> 
+  pivot_wider(
+    names_from = INDICATOR,
+    values_from = Value
+  ) |> 
+  mutate(
+    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
+    Year = as.integer(Year),
+    govcgdp_weo = `Gross debt, General government, Percent of GDP`,
+    .keep = "none"
+  ) |> 
+  filter(!is.na(iso3c))
+
 govcgdp_gdd <- gdd_long |> 
   select(Year, iso3c, cgovdebt) |> 
   rename(
@@ -628,7 +713,8 @@ govcgdp_pfmh <- pfmh |>
 # Combine Datasets
 
 govcgdp_comb <- govcgdp_gdd |> 
-  full_join(govcgdp_pfmh, by = c("iso3c", "Year"))
+  full_join(govcgdp_pfmh, by = c("iso3c", "Year")) |> 
+  full_join(govcgdp_weo, by = c("iso3c", "Year"))
 
 # Choose the longest series per country
 
@@ -636,6 +722,7 @@ govcgdp_comb <- combine_longest_series(
   govcgdp_comb,
   "govcgdp",
   c(
+    "govcgdp_weo",
     "govcgdp_pfmh",
     "govcgdp_gdd"
   )
@@ -827,7 +914,7 @@ panel <- left_join(panel, nfa_combined |> select(Year, iso3c, nfa), by = c("iso3
 
 # Compute NFA-to-GDP ratio
 panel <- panel |> 
-  mutate(nfagdp = (nfa / gdpmil) * 100)
+  mutate(nfagdp = (nfa / ngdpmil) * 100)
 
 ## 2.10 Yield curve ===================================
 
@@ -1212,12 +1299,12 @@ check <- panel |>
 sort(colSums(check[,-1]), decreasing = T)
 
 panel |> 
-  select(cgdppriv, rgdp, inflation, govcgdp, bcagdp, bmgrowth, ltd, nfagdp) |> 
+  select(cgdppriv, rgdpgrowth, inflation, govcgdp, bcagdp, bmgrowth, ltd, nfagdp) |> 
   complete.cases() |> 
   sum()
 
 predictors <- c(
-  "cgdppriv", "rgdp", "inflation", "govcgdp", "bcagdp", "bmgdp", "ltd", "nfagdp"
+  "cgdppriv", "rgdpgrowth", "inflation", "govcgdp", "bcagdp", "bmgdp", "ltd", "nfagdp"
 )
 
 panel_complete <- panel |> 
