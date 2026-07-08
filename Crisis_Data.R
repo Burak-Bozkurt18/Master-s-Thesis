@@ -46,6 +46,7 @@ crises <- read_xlsx(
 credit_bis <- read.csv("WS_TC_csv_col.csv")
 cgdp_bis <- read_csv("WS_CREDIT_GAP_csv_col.csv")
 bis_cpi <- read_csv("WS_LONG_CPI_csv_col.csv")
+bis_propprices <- read_csv("WS_SPP_csv_col.csv")
 
 # Eurostat
 str_eurostat <- read_xlsx("str_eurostat.xlsx", sheet = 2, skip = 7, na = c("", "NA", ":"))
@@ -211,6 +212,7 @@ nea_long <- nea |>
 # OECD
 sp_oecd <- read_xlsx("sp_oecd.xlsx", skip = 5)
 ir_oecd <- read_xlsx("OECD_STIR_LTIR.xlsx", skip = 3)
+pp_oecd <- read_xlsx("pp_oecd.xlsx", skip = 5)
 
 # World Bank - World Development Indicators
 wdi1 <- read_csv("wdi1.csv", na = c("", "NA", ".."))
@@ -266,7 +268,8 @@ wdi2_long <- wdi2 |>
     "ngdp" = `GDP (current LCU)`,
     "cgdppriv" = `Domestic credit to private sector (% of GDP)`,
     "bcgdpriv" = `Domestic credit to private sector by banks (% of GDP)`,
-    "trd" = `Total reserves (includes gold, current US$)`
+    "trd" = `Total reserves (includes gold, current US$)`,
+    "inflation" = `Inflation, consumer prices (annual %)`
   )
 
 # World Bank - Global Financial Development
@@ -771,11 +774,15 @@ cpi_weo_long <- weo_long |>
     .keep = "none"
   )
 
+inflation_wdi <- wdi2_long |> select(Year, iso3c, inflation)
+
 
 # Combine BIS and WEO
 
 infl_combined <- bis_cpi_long |> 
-  full_join(cpi_weo_long, by = c("iso3c", "Year"), suffix = c("_bis", "_weo"))
+  full_join(cpi_weo_long, by = c("iso3c", "Year"), suffix = c("_bis", "_weo")) |> 
+  full_join(inflation_wdi, by = c("iso3c", "Year")) |> 
+  rename("inflation_wdi" = inflation)
 
 # Choose the longest series per country
 
@@ -784,7 +791,8 @@ infl_combined <- combine_longest_series(
   "inflation",
   c(
     "inflation_bis",
-    "inflation_weo"
+    "inflation_weo",
+    "inflation_wdi"
   )
 )
 
@@ -833,8 +841,6 @@ panel <- left_join(panel, bca_comb |> select(iso3c, Year, bcagdp), by = c("iso3c
 
 ## 2.8 Property Prices =======================================
 
-bis_propprices <- read_csv("WS_SPP_csv_col.csv")
-
 bis_propprices_long <- bis_propprices |>
   pivot_longer(
     cols = !(FREQ:Series),
@@ -852,13 +858,49 @@ bis_propprices_long <- bis_propprices |>
   
 # Annualize quarterly data
 bis_propprices_long_annual <- bis_propprices_long |>
-  summarize(proppgrowth = mean(Price, na.rm = TRUE), .by = c(REF_AREA, Year, Value)) |> 
+  summarize(ppgrowth = mean(Price, na.rm = TRUE), .by = c(REF_AREA, Year, Value)) |> 
   mutate(iso3c = countrycode(REF_AREA, origin = "iso2c", destination = "iso3c")) |> 
   select(- c(REF_AREA, Value))
 
+# OECD
+pp_oecd_long <- pp_oecd |> 
+  slice(2:52) |> 
+  select(-c(`Time period...2`, `...69`)) |> 
+  rename("Country" = `Time period...1`) |> 
+  pivot_longer(
+    cols = -Country,
+    names_to = "Year",
+    values_to = "pp"
+  ) |> 
+  mutate(
+    Year = as.integer(Year),
+    iso3c = countrycode(Country, origin = "country.name", destination = "iso3c"),
+    pp,
+    .keep = "none"
+  )
+
+# Calculate growth
+pp_oecd_long <- pp_oecd_long |> 
+  group_by(iso3c) |> 
+  mutate(ppgrowth = (log(pp) - lag(log(pp))) * 100)
+
+# Combine datasets
+pp_comb <- bis_propprices_long_annual |> 
+  full_join(pp_oecd_long, by = c("iso3c", "Year"), suffix = c("_bis", "_oecd"))
+
+# Choose longest series
+pp_comb <- combine_longest_series(
+  pp_comb,
+  "ppgrowth",
+  c(
+    "ppgrowth_bis",
+    "ppgrowth_oecd"
+  )
+)
+
 # Add to panel
-panel <- left_join(panel, bis_propprices_long_annual,
-                                by = c("iso3c", "Year"))
+panel <- left_join(panel, pp_comb |> select(iso3c, Year, ppgrowth), by = c("iso3c", "Year"))
+
 
 
 
@@ -1016,6 +1058,16 @@ pfmh_ltr <- pfmh |>
     "Year" = year
   )
 
+# JST
+ir_jst <- jst |> 
+  select(year, iso, stir, ltrate) |> 
+  rename(
+    "Year" = year,
+    "iso3c" = iso,
+    "str_jst" = stir,
+    "ltr_jst" = ltrate
+  )
+
 # Merge all datasets
 
 ir_comb <- ir_oecd_long |> 
@@ -1023,12 +1075,13 @@ ir_comb <- ir_oecd_long |>
   full_join(mfs_ltr_long, by = c("iso3c", "Year")) |> 
   full_join(str_eurostat_long, by = c("iso3c", "Year")) |> 
   full_join(pfmh_ltr, by = c("iso3c", "Year")) |> 
+  full_join(ir_jst, by = c("iso3c", "Year")) |> 
   # Inflation for approximating long term nominal interest rate
   full_join(panel |> select(Year, iso3c, inflation), by = c("iso3c", "Year")) |> 
   mutate(
-    str = coalesce(str_oecd, str_mfs, str_eurostat),
+    str = coalesce(str_oecd, str_mfs, str_eurostat, str_jst),
     ltr_approx = rltir + inflation,
-    ltr = coalesce(ltr_oecd, ltr_mfs, ltr_approx),
+    ltr = coalesce(ltr_oecd, ltr_mfs, ltr_approx, ltr_jst),
     ycurve = ltr - str
   )
 
@@ -1254,20 +1307,6 @@ country_corr <- sp_comb |>
     else NA_real_
   )
 
-# Rebase the MFS series
-# IMF -> 2015 = 100
-
-# base2015 <- sp_comb |>
-#   filter(Year == 2015) |>
-#   select(iso3c, base2015 = sp_mfs)
-# 
-# sp_comb <- sp_comb |>
-#   left_join(base2015, by = "iso3c") |>
-#   mutate(
-#     sp_mfs2015 = sp_mfs / base2015 * 100
-#   ) |>
-#   select(-base2015)
-
 # Choose the longest series
 
 sp_comb <- combine_longest_series(
@@ -1299,12 +1338,12 @@ check <- panel |>
 sort(colSums(check[,-1]), decreasing = T)
 
 panel |> 
-  select(cgdppriv, rgdpgrowth, inflation, govcgdp, bcagdp, bmgrowth, ltd, nfagdp) |> 
+  select(cgdppriv, rgdpgrowth, inflation, govcgdp, bcagdp, bmgdp, ltd, nfagdp, spr, ycurve, ppgrowth) |> 
   complete.cases() |> 
   sum()
 
 predictors <- c(
-  "cgdppriv", "rgdpgrowth", "inflation", "govcgdp", "bcagdp", "bmgdp", "ltd", "nfagdp"
+  "cgdppriv", "rgdpgrowth", "inflation", "govcgdp", "bcagdp", "bmgdp", "ltd", "nfagdp", "spr", "ycurve", "ppgrowth"
 )
 
 panel_complete <- panel |> 
