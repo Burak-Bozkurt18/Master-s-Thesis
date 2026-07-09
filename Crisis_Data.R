@@ -477,7 +477,7 @@ ngdp <- combine_longest_series(
 ngdpmil <- combine_longest_series(
   gdp_comb,
   "ngdpmil",
-  c("ngdp_nea", "ngdpmil_weo", "ngdpmil_wdi")
+  c("ngdpmil_nea", "ngdpmil_weo", "ngdpmil_wdi")
 )
 
 ngdpbil <- combine_longest_series(
@@ -527,6 +527,69 @@ rgdp_comb <- combine_longest_series(
 # Add to panel
 
 panel <- left_join(panel, rgdp_comb |> select(iso3c, Year, rgdpgrowth), by = c("iso3c", "Year"))
+
+
+## 2.6 Inflation Data =================================================
+
+bis_cpi_long <- bis_cpi |> 
+  pivot_longer(
+    cols = !(FREQ:Series),
+    names_to = "Year",
+    values_to = "inflation"
+  ) |> 
+  filter(
+    grepl("^\\d{4}$", Year),
+    `Unit of measure` == "Year-on-year changes, in per cent",
+    Frequency == "Annual"
+  ) |> 
+  select(c(`Reference area`, inflation, Year)) |> 
+  mutate(
+    Year = as.integer(Year),
+    iso3c = countrycode(`Reference area`, origin = "country.name", destination = "iso3c"),
+    inflation,
+    .keep = "none"
+  )
+
+
+
+
+
+cpi_weo_long <- weo_long |> 
+  filter(INDICATOR == "All Items, Consumer price index (CPI), Period average, percent change") |> 
+  mutate(
+    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
+    Year = as.integer(Year),
+    inflation = Value,
+    .keep = "none"
+  )
+
+inflation_wdi <- wdi2_long |> select(Year, iso3c, inflation)
+
+
+# Combine BIS and WEO
+
+infl_combined <- bis_cpi_long |> 
+  full_join(cpi_weo_long, by = c("iso3c", "Year"), suffix = c("_bis", "_weo")) |> 
+  full_join(inflation_wdi, by = c("iso3c", "Year")) |> 
+  rename("inflation_wdi" = inflation)
+
+# Choose the longest series per country
+
+infl_combined <- combine_longest_series(
+  infl_combined,
+  "inflation",
+  c(
+    "inflation_bis",
+    "inflation_weo",
+    "inflation_wdi"
+  )
+)
+
+
+# Add to panel
+
+panel <- left_join(panel, infl_combined |> select(iso3c, Year, inflation), by = c("iso3c", "Year"))
+
 
 
 
@@ -639,47 +702,59 @@ credit_approx <- panel |>
 credit_comb <- credit_bis_long |> 
   full_join(credit_approx, by = c("iso3c", "Year"))
 
-# Check compatibility
-check <- credit_comb |> 
-  filter(!is.na(tloanspriv), !is.na(tloanspriv_approx)) |> 
-  group_by(iso3c) |> 
-  summarise(
-    mean_diff = mean(tloanspriv - tloanspriv_approx),
-    rmse = sqrt(mean((tloanspriv - tloanspriv_approx)^2)),
-    n = n()
-  )
-
-country_corr <- credit_comb |> 
-  group_by(iso3c) |> 
-  summarise(
-    cor =
-      if(sum(!is.na(tloanspriv) & !is.na(tloanspriv_approx)) >= 5)
-        cor(tloanspriv, tloanspriv_approx, use = "complete.obs")
-    else NA_real_
-  )
+# # Check compatibility
+# check <- credit_comb |> 
+#   filter(!is.na(tloanspriv), !is.na(tloanspriv_approx)) |> 
+#   group_by(iso3c) |> 
+#   summarise(
+#     mean_diff = mean(tloanspriv - tloanspriv_approx),
+#     rmse = sqrt(mean((tloanspriv - tloanspriv_approx)^2)),
+#     n = n()
+#   )
+# 
+# country_corr <- credit_comb |> 
+#   group_by(iso3c) |> 
+#   summarise(
+#     cor =
+#       if(sum(!is.na(tloanspriv) & !is.na(tloanspriv_approx)) >= 5)
+#         cor(tloanspriv, tloanspriv_approx, use = "complete.obs")
+#     else NA_real_
+#   )
 
 # Fill in missing values in tloanspriv with the approximated values
 credit_comb <- credit_comb |> 
   mutate(
-    tloanspriv = coalesce(tloanspriv, tloanspriv_approx),
-    tloanscorp = coalesce(tloanscorp, tloanscorp_approx),
-    tloansh = coalesce(tloansh, tloansh_approx)
+    tlpriv = coalesce(tloanspriv, tloanspriv_approx),
+    tlcorp = coalesce(tloanscorp, tloanscorp_approx),
+    tlh = coalesce(tloansh, tloansh_approx)
     )
 
-# Add to panel
-panel <- left_join(panel, credit_comb |> select(- c(tloanspriv_approx, tloanscorp_approx, tloansh_approx) ), by = c("iso3c", "Year"))
-
 # Calculate credit growth
-
-panel <- panel |>
-  arrange(iso3c, Year) |>
-  group_by(iso3c) |>
+credit_comb <- credit_comb |> 
+  arrange(iso3c, Year) |> 
+  group_by(iso3c) |> 
   mutate(
-    tloanspriv_growth = (log(tloanspriv) - lag(log(tloanspriv))) * 100,
-    tloanscorp_growth = (log(tloanscorp) - lag(log(tloanscorp))) * 100,
-    tloansh_growth = (log(tloansh) - lag(log(tloansh))) * 100
-  ) |>
+    tlpriv_growth = (log(tlpriv) - lag(log(tlpriv))) * 100,
+    tlcorp_growth = (log(tlcorp) - lag(log(tlcorp))) * 100,
+    tlh_growth = (log(tlh) - lag(log(tlh))) * 100,
+    blpriv_growth = (log(bloanspriv) - lag(log(bloanspriv))) * 100
+  )
+
+# Calculate real credit growth
+credit_comb <- credit_comb |> 
+  left_join(panel |> select(Year, iso3c, inflation), by = c("iso3c", "Year")) |> 
+  arrange(iso3c, Year) |> 
+  group_by(iso3c) |> 
+  mutate(
+    tlpriv_rgrowth = tlpriv_growth - inflation,
+    tlcorp_rgrowth = tlcorp_growth - inflation,
+    tlh_rgrowth = tlh_growth - inflation,
+    blpriv_rgrowth = blpriv_growth - inflation
+  ) |> 
   ungroup()
+
+# Add to panel
+panel <- left_join(panel, credit_comb |>  select(Year, iso3c, ends_with("rgrowth")), by = c("iso3c", "Year"))
 
 
 ### 2.5.2 Public Debt =================================================
@@ -734,73 +809,6 @@ govcgdp_comb <- combine_longest_series(
 # Add to panel
 
 panel <- left_join(panel, govcgdp_comb |> select(iso3c, Year, govcgdp), by = c("iso3c", "Year"))
-
-
-
-
-## 2.6 Inflation Data =================================================
-
-
-
-bis_cpi_long <- bis_cpi |> 
-  pivot_longer(
-    cols = !(FREQ:Series),
-    names_to = "Year",
-    values_to = "inflation"
-  ) |> 
-  filter(
-    grepl("^\\d{4}$", Year),
-    `Unit of measure` == "Year-on-year changes, in per cent",
-    Frequency == "Annual"
-    ) |> 
-  select(c(`Reference area`, inflation, Year)) |> 
-  mutate(
-    Year = as.integer(Year),
-    iso3c = countrycode(`Reference area`, origin = "country.name", destination = "iso3c"),
-    inflation,
-    .keep = "none"
-    )
-
-
-
-
-
-cpi_weo_long <- weo_long |> 
-  filter(INDICATOR == "All Items, Consumer price index (CPI), Period average, percent change") |> 
-  mutate(
-    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
-    Year = as.integer(Year),
-    inflation = Value,
-    .keep = "none"
-  )
-
-inflation_wdi <- wdi2_long |> select(Year, iso3c, inflation)
-
-
-# Combine BIS and WEO
-
-infl_combined <- bis_cpi_long |> 
-  full_join(cpi_weo_long, by = c("iso3c", "Year"), suffix = c("_bis", "_weo")) |> 
-  full_join(inflation_wdi, by = c("iso3c", "Year")) |> 
-  rename("inflation_wdi" = inflation)
-
-# Choose the longest series per country
-
-infl_combined <- combine_longest_series(
-  infl_combined,
-  "inflation",
-  c(
-    "inflation_bis",
-    "inflation_weo",
-    "inflation_wdi"
-  )
-)
-
-
-# Add to panel
-
-panel <- left_join(panel, infl_combined |> select(iso3c, Year, inflation), by = c("iso3c", "Year"))
-
 
 ## 2.7 Current account balance (% of GDP) =============================
 
@@ -1111,12 +1119,12 @@ bmoney_mfs_long <- bmoney_mfs |>
     bmoney,
     .keep = "none")
 
-bmoney_jst <- jst |> 
-  select(year, iso, money) |> 
-  rename(
-    "iso3c" = iso,
-    "Year" = year
-    )
+# bmoney_jst <- jst |> 
+#   select(year, iso, money) |> 
+#   rename(
+#     "iso3c" = iso,
+#     "Year" = year
+#     )
 
 bmgdp_gfd <- gfd_long |> select(Year, iso3c, bmgdp)
 
@@ -1126,24 +1134,16 @@ bmgdp_gfd <- gfd_long |> select(Year, iso3c, bmgdp)
 bmoney_combined <- bmoney_mfs_long |> 
   full_join(bmoney_wdi_long, by = c("iso3c", "Year"), suffix = c("_mfs", "_wdi")) |>
   full_join(bmgdp_gfd, by = c("iso3c", "Year"), suffix = c("_wdi", "_gfd")) |> 
-  full_join(bmoney_jst, by = c("iso3c", "Year")) |> 
+  # Nominal GDP for approximating broad money
+  full_join(panel |> select(Year, iso3c, ngdpmil), by = c("iso3c", "Year")) |> 
+  # full_join(bmoney_jst, by = c("iso3c", "Year")) |> 
   rename(
     "bmoney_mfs" = bmoney,
-    "bmoney_wdi" = bm,
-    "bmoney_jst" = money
+    "bmoney_wdi" = bm
+    # "bmoney_jst" = money
   )
 
 # Choose the longest series per country
-bmoney <- combine_longest_series(
-  bmoney_combined,
-  "bmoney",
-  c(
-    "bmoney_mfs",
-    "bmoney_wdi",
-    "bmoney_jst"
-  )
-)
-
 bmgdp <- combine_longest_series(
   bmoney_combined,
   "bmgdp",
@@ -1153,16 +1153,41 @@ bmgdp <- combine_longest_series(
   )
 )
 
-# Rescale the JST broad money values for CAN, FRA, DEU and ITA from billions to millions 
-bmoney <- bmoney |>
-  mutate(
-    bmoney = if_else(
-      source == "bmoney_jst" &
-        iso3c %in% c("CAN", "FRA", "DEU", "ITA"),
-      bmoney * 1000,
-      bmoney
+# Approximate broad money
+bmoney_combined <- bmoney_combined |> 
+  full_join(bmgdp |> select(Year, iso3c, bmgdp), by = c("Year", "iso3c")) |>  
+  mutate(bmoney_approx = bmgdp / 100 * ngdpmil)
+
+check <- bmoney_combined |> 
+    filter(!is.na(bmoney_wdi), !is.na(bmoney_approx)) |>
+    group_by(iso3c) |>
+    summarise(
+      mean_diff = mean(bmoney_wdi - bmoney_approx),
+      rmse = sqrt(mean((bmoney_wdi - bmoney_approx)^2)),
+      n = n()
     )
+
+bmoney <- combine_longest_series(
+  bmoney_combined,
+  "bmoney",
+  c(
+    "bmoney_mfs",
+    "bmoney_wdi",
+    "bmoney_approx"
+    # "bmoney_jst"
   )
+)
+
+# # Rescale the JST broad money values for CAN, FRA, DEU and ITA from billions to millions 
+# bmoney <- bmoney |>
+#   mutate(
+#     bmoney = if_else(
+#       source == "bmoney_jst" &
+#         iso3c %in% c("CAN", "FRA", "DEU", "ITA"),
+#       bmoney * 1000,
+#       bmoney
+#     )
+#   )
 
 
 # Calculate broad money growth rate
@@ -1172,12 +1197,20 @@ bmoney <- bmoney |>
   group_by(iso3c) |>
   mutate(
     bmgrowth = (log(bmoney) - lag(log(bmoney))) * 100
-  ) |>
-  ungroup()
+  )
+
+# Calculate real broad money growth
+bmoney <- bmoney |>
+  left_join(panel |> select(Year, iso3c, inflation), by = c("iso3c", "Year")) |> 
+  arrange(iso3c, Year) |>
+  group_by(iso3c) |>
+  mutate(
+    bm_rgrowth = bmgrowth - inflation
+  )
 
 # Add to panel
 
-panel <- left_join(panel, bmoney |> select(Year, iso3c, bmoney, bmtr, bmgrowth),
+panel <- left_join(panel, bmoney |> select(Year, iso3c, bmoney, bmtr, bm_rgrowth),
                       by = c("iso3c", "Year"))
 panel <- left_join(panel, bmgdp |> select(Year, iso3c, bmgdp), by = c("iso3c", "Year"))
 
@@ -1338,12 +1371,12 @@ check <- panel |>
 sort(colSums(check[,-1]), decreasing = T)
 
 panel |> 
-  select(cgdppriv, rgdpgrowth, inflation, govcgdp, bcagdp, bmgdp, ltd, nfagdp, spr, ycurve, ppgrowth) |> 
+  select(cgdppriv, rgdpgrowth, inflation, govcgdp, bcagdp, bmgdp, ltd, nfagdp) |> 
   complete.cases() |> 
   sum()
 
 predictors <- c(
-  "cgdppriv", "rgdpgrowth", "inflation", "govcgdp", "bcagdp", "bmgdp", "ltd", "nfagdp", "spr", "ycurve", "ppgrowth"
+  "cgdppriv", "rgdpgrowth", "inflation", "govcgdp", "bcagdp", "bmgdp", "ltd", "nfagdp"
 )
 
 panel_complete <- panel |> 
