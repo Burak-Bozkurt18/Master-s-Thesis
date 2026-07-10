@@ -6,7 +6,9 @@
 # 1 Load Packags ===========================================================
 library(readxl)
 library(tidyverse)
+library(tidymodels)
 library(countrycode)
+library(stargazer)
 
 # 1 Create functions =======================================================
 
@@ -1321,7 +1323,13 @@ sp_mfs_long <- combine_longest_series(
 # Combine datasets
 sp_comb <- sp_oecd_long |> 
   full_join(sp_mfs_long |> select(Year, iso3c, sp), by = c("iso3c", "Year"), suffix = c("_oecd", "_mfs")) |> 
-  full_join(spr_gfd, by = c("iso3c", "Year"))
+  full_join(spr_gfd, by = c("iso3c", "Year")) |> 
+  # Convert values of 0 into NA
+  mutate(
+    sp_oecd = na_if(sp_oecd, 0),
+    sp_mfs = na_if(sp_mfs, 0),
+    spr_gfd = na_if(spr_gfd, 0)
+  )
 
 # Calculate returns
 sp_comb <- sp_comb |> 
@@ -1401,3 +1409,37 @@ panel_complete |>
     n_precrisis3 = sum(PreCrisis3),
     n_precrisis4 = sum(PreCrisis4)
   )
+
+# 3 Exploratory Analysis =====================================================
+summary(panel)
+
+panel |> 
+  ggplot(aes(x = Year, y = Crisis_Start)) +
+  geom_col()
+
+stargazer(
+  as.data.frame(panel) |> select(!(Year:ngdpbil)), 
+  type = "latex", 
+  title="Descriptive statistics", 
+  digits = 1
+  )
+
+# 4 Estimate Models ==========================================================
+
+## 4.1 Logit ================================================================
+
+model1 <- panel |> 
+  filter(Crisis != 1) |> 
+  glm(formula = PreCrisis3 ~ factor(iso3c) + cgdppriv, family = binomial())
+
+summary(model1)
+
+log_spec <- logistic_reg() |>
+  set_engine("glm")
+
+log_fit <- logistic_reg() |> 
+  set_engine("glm") |> 
+  fit(factor(PreCrisis3) ~ factor(iso3c) + cgdppriv, data = filter(panel, Crisis != 1))
+
+log_fit$fit$coefficients
+
