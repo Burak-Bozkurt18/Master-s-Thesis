@@ -423,6 +423,23 @@ panel <- panel |>
   ungroup() |> 
   arrange(Country)
 
+# Categorize countries in Advanced Economies and Emerging/Developing Economies
+advanced <- c(
+  "AUS", "AUT", "BEL", "CAN", "CHE", "CYP", "CZE",
+  "DEU", "DNK", "ESP", "EST", "FIN", "FRA", "GBR",
+  "GRC", "HRV", "IRL", "ISL", "ISR", "ITA", "JPN",
+  "KOR", "LTU", "LUX", "LVA", "MLT", "NLD", "NOR",
+  "NZL", "PRT", "SGP", "SVK", "SVN", "SWE", "USA"
+)
+
+panel <- panel |>
+  mutate(
+    country_group = if_else(
+      iso3c %in% advanced,
+      "Advanced Economies",
+      "Emerging and Developing Economies"
+    )
+  )
 
 
 ## 2.4 GDP =============================================================
@@ -1414,15 +1431,18 @@ panel_complete |>
 summary(panel)
 
 panel |> 
-  ggplot(aes(x = Year, y = Crisis_Start)) +
+  ggplot(aes(x = Year, y = Crisis_Start, fill = country_group)) +
   geom_col()
 
 stargazer(
   as.data.frame(panel) |> select(!(Year:ngdpbil)), 
-  type = "latex", 
+  type = "text", 
   title="Descriptive statistics", 
-  digits = 1
+  digits = 1,
+  median = T
   )
+
+
 
 # 4 Estimate Models ==========================================================
 
