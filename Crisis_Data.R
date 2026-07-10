@@ -1352,8 +1352,21 @@ sp_comb <- combine_longest_series(
   )
 )
 
+# Compute real stock market return
+sp_comb |> 
+  arrange(Year, iso3c)
+
+sp_comb <- sp_comb |> 
+  left_join(panel |> select(Year, iso3c, inflation), by = c("iso3c", "Year")) |> 
+  arrange(iso3c, Year) |> 
+  group_by(iso3c) |> 
+  mutate(
+    sprr = spr - inflation,
+  ) |> 
+  ungroup()
+
 # Add to panel
-panel <- left_join(panel, sp_comb |> select(iso3c, Year, spr), by = c("iso3c", "Year"))
+panel <- left_join(panel, sp_comb |> select(iso3c, Year, sprr), by = c("iso3c", "Year"))
 
 
 ## 2.14 Check how many obs ===================================================
