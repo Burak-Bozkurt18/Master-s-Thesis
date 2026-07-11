@@ -7,7 +7,7 @@
 # Outputs:  data/interim/
 # ---------------------------------------------------------
 
-# 1 Load Packages ===========================================================
+# 0 Load Packages ===========================================================
 library(readxl)
 library(tidyverse)
 library(tidymodels)
@@ -41,23 +41,130 @@ combine_longest_series <- function(data, indicator, sources) {
 
 # 2 Read and Clean Data ====================================================
 
-## 2.1 Read Datasets =======================================================
+## 2.1 Laeven & Valencia Banking Crisis Dataset ============================
 
 crises <- read_xlsx(
   path = "data/raw/SYSTEMIC_BANKING_CRISES_DATABASE_2026.xlsx",
   sheet = 2
 )
 
-# BIS
+## 2.2 BIS ===================================================================
+
+### 2.2.1 Loans ==============================================================
 credit_bis <- read.csv("data/raw/WS_TC_csv_col.csv")
+
+credit_bis_long <- credit_bis |> 
+  pivot_longer(
+    cols = starts_with("X"),
+    names_to = "Time",
+    values_to = "Value" 
+  ) |> 
+  filter(
+    Unit.type == "Domestic currency (incl. conv. to current ccy made using a fix parity)", 
+    Valuation.method == "Market value",
+    Adjustment == "Adjusted for breaks",
+    Borrowing.sector %in% c("Private non-financial sector", "Households & NPISHs", "Non-financial corporations"),
+    # Year end value
+    str_detect(Time, "Q4")
+  ) |> 
+  mutate(
+    Year = as.integer(str_extract(Time, "\\d{4}")),
+    # Add country codes
+    iso3c = countrycode(Borrowers..country, origin = "country.name", destination = "iso3c")
+  ) |> 
+  select(c(Borrowing.sector, Lending.sector, Year, Value, iso3c)) |> 
+  pivot_wider( 
+    names_from = Lending.sector,
+    values_from = Value
+  ) |> 
+  pivot_wider(
+    names_from = Borrowing.sector,
+    values_from = c(`All sectors`, `Banks, domestic`)
+  ) |> 
+  mutate(
+    Year,
+    iso3c,
+    tloanscorp = `All sectors_Non-financial corporations`,
+    tloanspriv = `All sectors_Private non-financial sector`,
+    tloansh = `All sectors_Households & NPISHs`,
+    bloanspriv = `Banks, domestic_Private non-financial sector`,
+    .keep = "none"
+  )
+
+### 2.2.2 Credit-to-GDP ratio =============================================
+
 cgdp_bis <- read_csv("data/raw/WS_CREDIT_GAP_csv_col.csv")
+
+cgdp_bis_long <- cgdp_bis |> 
+  pivot_longer(
+    cols = !(FREQ:Series),
+    names_to = "Time",
+    values_to = "cgdppriv"
+  ) |> 
+  # Year end value
+  filter(
+    str_detect(Time, "Q4"),
+    `Credit gap data type` == "Credit-to-GDP ratios (actual data)"
+  ) |> 
+  mutate(
+    Year = as.integer(str_extract(Time, "\\d{4}")),
+    iso3c = countrycode(`Borrowers' country`, origin = "country.name", destination = "iso3c")
+  ) |> 
+  select(c(iso3c, Year, cgdppriv))
+
+### 2.2.3 Consumer Price Index / Inflation ====================================
+
 bis_cpi <- read_csv("data/raw/WS_LONG_CPI_csv_col.csv")
+
+bis_cpi_long <- bis_cpi |> 
+  pivot_longer(
+    cols = !(FREQ:Series),
+    names_to = "Year",
+    values_to = "inflation"
+  ) |> 
+  filter(
+    grepl("^\\d{4}$", Year),
+    `Unit of measure` == "Year-on-year changes, in per cent",
+    Frequency == "Annual"
+  ) |> 
+  select(c(`Reference area`, inflation, Year)) |> 
+  mutate(
+    Year = as.integer(Year),
+    iso3c = countrycode(`Reference area`, origin = "country.name", destination = "iso3c"),
+    inflation,
+    .keep = "none"
+  )
+
+### 2.2.4 Property Prices =====================================================
+
 bis_propprices <- read_csv("data/raw/WS_SPP_csv_col.csv")
 
-# Eurostat
+bis_propprices_long <- bis_propprices |>
+  pivot_longer(
+    cols = !(FREQ:Series),
+    names_to = "Time",
+    values_to = "Price"
+  ) |> 
+  mutate(Year = as.integer(str_extract(Time, "\\d{4}"))) |>
+  filter(
+    `Unit of measure` == "Year-on-year changes, in per cent",
+    Value == "Real",
+    Year >= "1970",
+    !(`Reference area` %in% c("Advanced economies", "Euro area", "World", "Emerging market economies (aggregate)"))
+  )
+
+# Annualize quarterly data
+bis_propprices_long_annual <- bis_propprices_long |>
+  summarize(ppgrowth = mean(Price, na.rm = TRUE), .by = c(REF_AREA, Year, Value)) |> 
+  mutate(iso3c = countrycode(REF_AREA, origin = "iso2c", destination = "iso3c")) |> 
+  select(- c(REF_AREA, Value))
+
+## 2.3 Eurostat ===============================================================
 str_eurostat <- read_xlsx("data/raw/str_eurostat.xlsx", sheet = 2, skip = 7, na = c("", "NA", ":"))
 
-# IMF Global Debt Database
+## 2.4 IMF ====================================================================
+
+### 2.4.1 Global Debt Database (GDD) ========================================
 gdd <- read_csv("data/raw/GDD.csv")
 
 gdd_long <- gdd |> 
@@ -88,7 +195,7 @@ gdd_long <- gdd |>
     .keep = "none"
   )
 
-# IMF Africa Regional Economic Outlook
+### 2.4.2 Africa Regional Economic Outlook (AFRREO) ===========================
 afrreo <- read_csv("data/raw/AFRREO.csv")
 
 afrreo_long <- afrreo |> 
@@ -132,7 +239,7 @@ afrreo_long <- afrreo |>
     .keep = "none"
   )
 
-# IMF World Economic Outlook
+### 2.4.3 World Economic Outlook (WEO) ========================================
 weo <- read_csv("data/raw/WEO.csv")
 
 weo_long <- weo |> 
@@ -142,10 +249,10 @@ weo_long <- weo |>
     values_to = "Value"
   ) 
 
-# IMF Public Finances in Modern History
+### 2.4.4 Public Finances in Modern History (PFMH) ==============================
 pfmh <- read_xlsx("data/raw/PFMH.xlsx")
 
-# IMF Monetary Financial Statistics
+### 2.4.5 Monetary Financial Statistics (MFS) ===================================
 nfa_mfs <- read_csv("data/raw/NetAssets_IMF_MFS.csv")
 nfa_mfs <- nfa_mfs |>
   mutate(
@@ -167,7 +274,7 @@ bmoney_mfs <- read_csv("data/raw/IMF_MFS_BroadMoney.csv")
 ltd_mfs <- read_csv("data/raw/loans_to_deposit_mfs.csv")
 sp_mfs <- read_csv("data/raw/sp_mfs.csv")
 
-# IMF - National Economic Accounts (NEA)
+### 2.4.6 National Economic Accounts (NEA) ================================
 nea <- read_csv("data/raw/nea.csv")
 
 nea_long <- nea |> 
@@ -190,12 +297,15 @@ nea_long <- nea |>
   ) |> 
   filter(!is.na(iso3c))
 
-# OECD
+## 2.5 OECD =========================================================
 sp_oecd <- read_xlsx("data/raw/sp_oecd.xlsx", skip = 5)
 ir_oecd <- read_xlsx("data/raw/ir_oecd.xlsx", skip = 4)
 pp_oecd <- read_xlsx("data/raw/pp_oecd.xlsx", skip = 5)
 
-# World Bank - World Development Indicators
+
+## 2.6 World Bank ==================================================
+
+### 2.6.1 World Development Indicators (WDI) =======================
 wdi1 <- read_csv("data/raw/wdi1.csv", na = c("", "NA", ".."))
 wdi2 <- read_csv("data/raw/wdi2.csv", na = c("", "NA", ".."))
 
@@ -253,7 +363,7 @@ wdi2_long <- wdi2 |>
     "inflation" = `Inflation, consumer prices (annual %)`
   )
 
-# World Bank - Global Financial Development
+### 2.6.2 Global Financial Development (GFD) =============================
 gfd <- read_csv("data/raw/gfd.csv", na = c("", "NA", ".."), locale = locale(encoding = "Latin1"))
 
 gfd_long <-  gfd |>
@@ -278,7 +388,7 @@ gfd_long <-  gfd |>
     .keep = "none"
   )
 
-# Jordà-Schularick-Taylor Macrohistory Database
+## 2.7 Jordà-Schularick-Taylor Macrohistory Database (JST) ====================
 jst <- read_xlsx("data/raw/JSTdatasetR6.xlsx")
 
 ## 2.2 Banking Crises Data =================================================
@@ -529,24 +639,7 @@ panel <- left_join(panel, rgdp_comb |> select(iso3c, Year, rgdpgrowth), by = c("
 
 ## 2.6 Inflation Data =================================================
 
-bis_cpi_long <- bis_cpi |> 
-  pivot_longer(
-    cols = !(FREQ:Series),
-    names_to = "Year",
-    values_to = "inflation"
-  ) |> 
-  filter(
-    grepl("^\\d{4}$", Year),
-    `Unit of measure` == "Year-on-year changes, in per cent",
-    Frequency == "Annual"
-  ) |> 
-  select(c(`Reference area`, inflation, Year)) |> 
-  mutate(
-    Year = as.integer(Year),
-    iso3c = countrycode(`Reference area`, origin = "country.name", destination = "iso3c"),
-    inflation,
-    .keep = "none"
-  )
+
 
 
 
@@ -595,66 +688,8 @@ panel <- left_join(panel, infl_combined |> select(iso3c, Year, inflation), by = 
 
 ### 2.5.1 Private Debt ===============================================
 
-# Turn into long format
-credit_bis_long <- credit_bis |> 
-  pivot_longer(
-    cols = starts_with("X"),
-    names_to = "Time",
-    values_to = "Value" 
-  ) |> 
-  filter(
-    Unit.type == "Domestic currency (incl. conv. to current ccy made using a fix parity)", 
-    Valuation.method == "Market value",
-    Adjustment == "Adjusted for breaks",
-    Borrowing.sector %in% c("Private non-financial sector", "Households & NPISHs", "Non-financial corporations"),
-    # Year end value
-    str_detect(Time, "Q4")
-  ) |> 
-  mutate(
-    Year = as.integer(str_extract(Time, "\\d{4}")),
-    # Add country codes
-    iso3c = countrycode(Borrowers..country, origin = "country.name", destination = "iso3c")
-  ) |> 
-  select(c(Borrowing.sector, Lending.sector, Year, Value, iso3c)) |> 
-  pivot_wider( 
-    names_from = Lending.sector,
-    values_from = Value
-  ) |> 
-  pivot_wider(
-    names_from = Borrowing.sector,
-    values_from = c(`All sectors`, `Banks, domestic`)
-  ) |> 
-  mutate(
-    Year,
-    iso3c,
-    tloanscorp = `All sectors_Non-financial corporations`,
-    tloanspriv = `All sectors_Private non-financial sector`,
-    tloansh = `All sectors_Households & NPISHs`,
-    bloanspriv = `Banks, domestic_Private non-financial sector`,
-    .keep = "none"
-  )
-
 
 # Credit to GDP ratio
-
-cgdp_bis_long <- cgdp_bis |> 
-  pivot_longer(
-    cols = !(FREQ:Series),
-    names_to = "Time",
-    values_to = "cgdppriv"
-  ) |> 
-  # Year end value
-  filter(
-    str_detect(Time, "Q4"),
-    `Credit gap data type` == "Credit-to-GDP ratios (actual data)"
-  ) |> 
-  mutate(
-    Year = as.integer(str_extract(Time, "\\d{4}")),
-    iso3c = countrycode(`Borrowers' country`, origin = "country.name", destination = "iso3c")
-  ) |> 
-  select(c(iso3c, Year, cgdppriv))
-
-
 
 # Combine everything
 
@@ -846,27 +881,6 @@ panel <- left_join(panel, bca_comb |> select(iso3c, Year, bcagdp), by = c("iso3c
 
 
 ## 2.8 Property Prices =======================================
-
-bis_propprices_long <- bis_propprices |>
-  pivot_longer(
-    cols = !(FREQ:Series),
-    names_to = "Time",
-    values_to = "Price"
-  ) |> 
-  mutate(Year = as.integer(str_extract(Time, "\\d{4}"))) |>
-  filter(
-    `Unit of measure` == "Year-on-year changes, in per cent",
-    Value == "Real",
-    Year >= "1970",
-    !(`Reference area` %in% c("Advanced economies", "Euro area", "World", "Emerging market economies (aggregate)"))
-  )
-
-
-# Annualize quarterly data
-bis_propprices_long_annual <- bis_propprices_long |>
-  summarize(ppgrowth = mean(Price, na.rm = TRUE), .by = c(REF_AREA, Year, Value)) |> 
-  mutate(iso3c = countrycode(REF_AREA, origin = "iso2c", destination = "iso3c")) |> 
-  select(- c(REF_AREA, Value))
 
 # OECD
 pp_oecd_long <- pp_oecd |> 
