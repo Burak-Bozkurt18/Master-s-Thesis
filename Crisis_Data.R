@@ -1428,11 +1428,14 @@ panel_complete |>
   )
 
 # 3 Exploratory Analysis =====================================================
-summary(panel)
 
 panel |> 
   ggplot(aes(x = Year, y = Crisis_Start, fill = country_group)) +
-  geom_col()
+  geom_col() + 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank()
+    )
 
 stargazer(
   as.data.frame(panel) |> select(!(Year:ngdpbil)), 
