@@ -1,9 +1,13 @@
-# Project Information =========================================================
-# Project:       Master's Thesis
-# Author:        Burak Bozkurt
-# Last modified: 30 June 2026
+# ---------------------------------------------------------
+# Step 1: Data Transformation & Cleaning
+# Purpose:  Standardise column names, derive log-wage and a
+#           readable gender variable, and subset to the
+#           variables needed for analysis.
+# Inputs:   All files in data/raw
+# Outputs:  data/interim/
+# ---------------------------------------------------------
 
-# 1 Load Packags ===========================================================
+# 1 Load Packages ===========================================================
 library(readxl)
 library(tidyverse)
 library(tidymodels)
@@ -40,21 +44,21 @@ combine_longest_series <- function(data, indicator, sources) {
 ## 2.1 Read Datasets =======================================================
 
 crises <- read_xlsx(
-  path = "SYSTEMIC_BANKING_CRISES_DATABASE_2026.xlsx",
+  path = "data/raw/SYSTEMIC_BANKING_CRISES_DATABASE_2026.xlsx",
   sheet = 2
-  )
+)
 
 # BIS
-credit_bis <- read.csv("WS_TC_csv_col.csv")
-cgdp_bis <- read_csv("WS_CREDIT_GAP_csv_col.csv")
-bis_cpi <- read_csv("WS_LONG_CPI_csv_col.csv")
-bis_propprices <- read_csv("WS_SPP_csv_col.csv")
+credit_bis <- read.csv("data/raw/WS_TC_csv_col.csv")
+cgdp_bis <- read_csv("data/raw/WS_CREDIT_GAP_csv_col.csv")
+bis_cpi <- read_csv("data/raw/WS_LONG_CPI_csv_col.csv")
+bis_propprices <- read_csv("data/raw/WS_SPP_csv_col.csv")
 
 # Eurostat
-str_eurostat <- read_xlsx("str_eurostat.xlsx", sheet = 2, skip = 7, na = c("", "NA", ":"))
+str_eurostat <- read_xlsx("data/raw/str_eurostat.xlsx", sheet = 2, skip = 7, na = c("", "NA", ":"))
 
 # IMF Global Debt Database
-gdd <- read_csv("GDD.csv")
+gdd <- read_csv("data/raw/GDD.csv")
 
 gdd_long <- gdd |> 
   pivot_longer(
@@ -85,7 +89,7 @@ gdd_long <- gdd |>
   )
 
 # IMF Africa Regional Economic Outlook
-afrreo <- read_csv("AFRREO.csv")
+afrreo <- read_csv("data/raw/AFRREO.csv")
 
 afrreo_long <- afrreo |> 
   filter(
@@ -129,7 +133,7 @@ afrreo_long <- afrreo |>
   )
 
 # IMF World Economic Outlook
-weo <- read_csv("WEO.csv")
+weo <- read_csv("data/raw/WEO.csv")
 
 weo_long <- weo |> 
   pivot_longer(
@@ -139,10 +143,10 @@ weo_long <- weo |>
   ) 
 
 # IMF Public Finances in Modern History
-pfmh <- read_xlsx("PFMH.xlsx")
+pfmh <- read_xlsx("data/raw/PFMH.xlsx")
 
 # IMF Monetary Financial Statistics
-nfa_mfs <- read_csv("NetAssets_IMF_MFS.csv")
+nfa_mfs <- read_csv("data/raw/NetAssets_IMF_MFS.csv")
 nfa_mfs <- nfa_mfs |>
   mutate(
     priority = case_when(
@@ -157,14 +161,14 @@ nfa_mfs <- nfa_mfs |>
   slice(1) |>
   ungroup()
 
-mfs_str <- read_csv("IMF_MFS_STR.csv")
-mfs_ltr <- read_csv("IMF_MFS_LTR.csv")
-bmoney_mfs <- read_csv("IMF_MFS_BroadMoney.csv")
-ltd_mfs <- read_csv("loans_to_deposit_mfs.csv")
-sp_mfs <- read_csv("sp_mfs.csv")
+mfs_str <- read_csv("data/raw/IMF_MFS_STR.csv")
+mfs_ltr <- read_csv("data/raw/IMF_MFS_LTR.csv")
+bmoney_mfs <- read_csv("data/raw/IMF_MFS_BroadMoney.csv")
+ltd_mfs <- read_csv("data/raw/loans_to_deposit_mfs.csv")
+sp_mfs <- read_csv("data/raw/sp_mfs.csv")
 
 # IMF - National Economic Accounts (NEA)
-nea <- read_csv("nea.csv")
+nea <- read_csv("data/raw/nea.csv")
 
 nea_long <- nea |> 
   pivot_longer(
@@ -187,13 +191,13 @@ nea_long <- nea |>
   filter(!is.na(iso3c))
 
 # OECD
-sp_oecd <- read_xlsx("sp_oecd.xlsx", skip = 5)
-ir_oecd <- read_xlsx("OECD_STIR_LTIR.xlsx", skip = 3)
-pp_oecd <- read_xlsx("pp_oecd.xlsx", skip = 5)
+sp_oecd <- read_xlsx("data/raw/sp_oecd.xlsx", skip = 5)
+ir_oecd <- read_xlsx("data/raw/ir_oecd.xlsx", skip = 4)
+pp_oecd <- read_xlsx("data/raw/pp_oecd.xlsx", skip = 5)
 
 # World Bank - World Development Indicators
-wdi1 <- read_csv("wdi1.csv", na = c("", "NA", ".."))
-wdi2 <- read_csv("wdi2.csv", na = c("", "NA", ".."))
+wdi1 <- read_csv("data/raw/wdi1.csv", na = c("", "NA", ".."))
+wdi2 <- read_csv("data/raw/wdi2.csv", na = c("", "NA", ".."))
 
 wdi1_long <- wdi1 |> 
   slice_head(n = -5) |> 
@@ -219,7 +223,7 @@ wdi1_long <- wdi1 |>
     "bmgrowth" = `Broad money growth (annual %)`,
     "bmgdp" = `Broad money (% of GDP)`
   )
-  
+
 
 wdi2_long <- wdi2 |> 
   slice_head(n = -5) |> 
@@ -250,7 +254,7 @@ wdi2_long <- wdi2 |>
   )
 
 # World Bank - Global Financial Development
-gfd <- read_csv("gfd.csv", na = c("", "NA", ".."), locale = locale(encoding = "Latin1"))
+gfd <- read_csv("data/raw/gfd.csv", na = c("", "NA", ".."), locale = locale(encoding = "Latin1"))
 
 gfd_long <-  gfd |>
   # Remove last five rows
@@ -275,7 +279,7 @@ gfd_long <-  gfd |>
   )
 
 # Jordà-Schularick-Taylor Macrohistory Database
-jst <- read_xlsx("JSTdatasetR6.xlsx")
+jst <- read_xlsx("data/raw/JSTdatasetR6.xlsx")
 
 ## 2.2 Banking Crises Data =================================================
 
@@ -428,7 +432,7 @@ gdp_nea <- nea_long |>
     ngdpmil = ngdp / 1000000,
     ngdpbil = ngdp / 1000000000
   )
-  
+
 # WEO
 gdp_weo <- weo_long |> 
   filter(INDICATOR == "Gross domestic product (GDP), Current prices, Domestic currency") |> 
@@ -448,7 +452,7 @@ gdp_wdi <- wdi2_long |>
   mutate(
     ngdpmil = ngdp / 1000000,
     ngdpbil = ngdp / 1000000000
-    )
+  )
 
 
 # Combine datasets
@@ -605,12 +609,12 @@ credit_bis_long <- credit_bis |>
     Borrowing.sector %in% c("Private non-financial sector", "Households & NPISHs", "Non-financial corporations"),
     # Year end value
     str_detect(Time, "Q4")
-    ) |> 
+  ) |> 
   mutate(
     Year = as.integer(str_extract(Time, "\\d{4}")),
     # Add country codes
     iso3c = countrycode(Borrowers..country, origin = "country.name", destination = "iso3c")
-    ) |> 
+  ) |> 
   select(c(Borrowing.sector, Lending.sector, Year, Value, iso3c)) |> 
   pivot_wider( 
     names_from = Lending.sector,
@@ -647,7 +651,7 @@ cgdp_bis_long <- cgdp_bis |>
   mutate(
     Year = as.integer(str_extract(Time, "\\d{4}")),
     iso3c = countrycode(`Borrowers' country`, origin = "country.name", destination = "iso3c")
-    ) |> 
+  ) |> 
   select(c(iso3c, Year, cgdppriv))
 
 
@@ -721,7 +725,7 @@ credit_comb <- credit_comb |>
     tlpriv = coalesce(tloanspriv, tloanspriv_approx),
     tlcorp = coalesce(tloanscorp, tloanscorp_approx),
     tlh = coalesce(tloansh, tloansh_approx)
-    )
+  )
 
 # Calculate credit growth
 credit_comb <- credit_comb |> 
@@ -780,7 +784,7 @@ govcgdp_pfmh <- pfmh |>
     "Year" = year,
     "iso3c" = isocode,
     "govcgdp_pfmh" = d
-    )
+  )
 
 # Combine Datasets
 
@@ -855,9 +859,9 @@ bis_propprices_long <- bis_propprices |>
     Value == "Real",
     Year >= "1970",
     !(`Reference area` %in% c("Advanced economies", "Euro area", "World", "Emerging market economies (aggregate)"))
-    )
+  )
 
-  
+
 # Annualize quarterly data
 bis_propprices_long_annual <- bis_propprices_long |>
   summarize(ppgrowth = mean(Price, na.rm = TRUE), .by = c(REF_AREA, Year, Value)) |> 
@@ -950,43 +954,44 @@ nfa_combined <- combine_longest_series(
   )
 )
 
-
+# Compute NFA-to-GDP ratio
+nfa_combined <- nfa_combined |> 
+  left_join(panel |> select(Year, iso3c, ngdpmil), by = c("iso3c", "Year")) |> 
+  mutate(nfagdp = (nfa / ngdpmil) * 100)
 
 # Add to panel
 
-panel <- left_join(panel, nfa_combined |> select(Year, iso3c, nfa), by = c("iso3c", "Year"))
-
-# Compute NFA-to-GDP ratio
-panel <- panel |> 
-  mutate(nfagdp = (nfa / ngdpmil) * 100)
+panel <- left_join(panel, nfa_combined |> select(Year, iso3c, nfagdp), by = c("iso3c", "Year"))
 
 ## 2.10 Yield curve ===================================
 
 # OECD
 
 # Get rid of useless rows and column
-ir_oecd <- ir_oecd |> 
+ir_oecd_long <- ir_oecd |> 
   slice_head(n = -2) |> 
-  select(-last_col())
-
-ir_oecd_long <- ir_oecd |>
+  slice_tail(n = -1) |> 
+  select(-c(`Time period...3`, last_col())) |> 
+  rename(
+    "Indicator" = `Time period...1`,
+    "Country" = `Time period...2`
+    ) |> 
   pivot_longer(
-    cols = matches("^\\d{4}$"),
+    cols = !(Indicator:Country),
     names_to = "Year",
     values_to = "Value"
   ) |> 
   pivot_wider(
-    names_from = Measure,
+    names_from = Indicator,
     values_from = Value
   ) |> 
   mutate(
     Year = as.integer(Year),
-    iso3c = countrycode(`Reference area`, origin = "country.name", destination = "iso3c"),
+    iso3c = countrycode(Country, origin = "country.name", destination = "iso3c"),
     ltr_oecd = `Long-term interest rates`,
     str_oecd = `Short-term interest rates`,
     .keep = "none"
   )
-
 
 
 # IMF MFS
@@ -1153,13 +1158,13 @@ bmoney_combined <- bmoney_combined |>
   mutate(bmoney_approx = bmgdp / 100 * ngdpmil)
 
 check <- bmoney_combined |> 
-    filter(!is.na(bmoney_wdi), !is.na(bmoney_approx)) |>
-    group_by(iso3c) |>
-    summarise(
-      mean_diff = mean(bmoney_wdi - bmoney_approx),
-      rmse = sqrt(mean((bmoney_wdi - bmoney_approx)^2)),
-      n = n()
-    )
+  filter(!is.na(bmoney_wdi), !is.na(bmoney_approx)) |>
+  group_by(iso3c) |>
+  summarise(
+    mean_diff = mean(bmoney_wdi - bmoney_approx),
+    rmse = sqrt(mean((bmoney_wdi - bmoney_approx)^2)),
+    n = n()
+  )
 
 bmoney <- combine_longest_series(
   bmoney_combined,
@@ -1204,8 +1209,8 @@ bmoney <- bmoney |>
 
 # Add to panel
 
-panel <- left_join(panel, bmoney |> select(Year, iso3c, bmoney, bmtr, bm_rgrowth),
-                      by = c("iso3c", "Year"))
+panel <- left_join(panel, bmoney |> select(Year, iso3c, bmtr, bm_rgrowth),
+                   by = c("iso3c", "Year"))
 panel <- left_join(panel, bmgdp |> select(Year, iso3c, bmgdp), by = c("iso3c", "Year"))
 
 
@@ -1353,8 +1358,6 @@ sp_comb <- combine_longest_series(
 )
 
 # Compute real stock market return
-sp_comb |> 
-  arrange(Year, iso3c)
 
 sp_comb <- sp_comb |> 
   left_join(panel |> select(Year, iso3c, inflation), by = c("iso3c", "Year")) |> 
@@ -1401,43 +1404,3 @@ panel_complete |>
     n_precrisis3 = sum(PreCrisis3),
     n_precrisis4 = sum(PreCrisis4)
   )
-
-# 3 Exploratory Analysis =====================================================
-
-panel |> 
-  ggplot(aes(x = Year, y = Crisis_Start, fill = country_group)) +
-  geom_col() + 
-  theme(
-    legend.position = "bottom",
-    legend.title = element_blank()
-    )
-
-stargazer(
-  as.data.frame(panel) |> select(!(Year:ngdpbil)), 
-  type = "text", 
-  title="Descriptive statistics", 
-  digits = 1,
-  median = T
-  )
-
-
-
-# 4 Estimate Models ==========================================================
-
-## 4.1 Logit ================================================================
-
-model1 <- panel |> 
-  filter(Crisis != 1) |> 
-  glm(formula = PreCrisis3 ~ factor(iso3c) + cgdppriv, family = binomial())
-
-summary(model1)
-
-log_spec <- logistic_reg() |>
-  set_engine("glm")
-
-log_fit <- logistic_reg() |> 
-  set_engine("glm") |> 
-  fit(factor(PreCrisis3) ~ factor(iso3c) + cgdppriv, data = filter(panel, Crisis != 1))
-
-log_fit$fit$coefficients
-
