@@ -1,4 +1,4 @@
-# Step 1: Create final panel
+# Step 1b: Create final panel
 # Purpose:  
 # Inputs:   All files in data/interim
 # Outputs:  data/interim/

@@ -1,5 +1,7 @@
-# Step 1: Data Transformation & Cleaning
-# Purpose:  Standardise column names, derive log-wage and a
+# Step 1a: Data Transformation & Cleaning
+# Purpose:  Convert all datasets into a long format,
+#           add country codes
+#           Standardise column names, derive log-wage and a
 #           readable gender variable, and subset to the
 #           variables needed for analysis.
 # Inputs:   All files in data/raw
@@ -17,7 +19,7 @@ library(janitor)
 combine_longest_series <- function(data, indicator, sources) {
   
   counts <- data |>
-    filter(Year >= 1970, Year <= 2025) |>
+    filter(year >= 1970, year <= 2025) |>
     group_by(iso3c) |>
     summarise(
       across(all_of(sources), ~sum(!is.na(.))),
@@ -48,7 +50,7 @@ clean_data <- function(data, indicator_col = NULL, country_col = country) {
     ) |>
     mutate(
       iso3c = countrycode({{ country_col }}, origin = "country.name", destination = "iso3c"),
-      year = as.integer(str_remove(year, "x"))
+      year = as.integer(str_extract(year, "\\d{4}"))
     ) |>
     filter(!is.na(iso3c))
   
@@ -77,41 +79,112 @@ crises <- read_xlsx(
   sheet = 2
 )
 
+# Select important columns
+crises <- crises |> 
+  clean_names() |> 
+  select(country, start, end)
+
+crises <- crises |> 
+  
+  # Remove rows that contain NA in column "start"
+  filter(!is.na(start)) |> 
+  
+  # Extract annotation symbols (e.g. "6/")
+  mutate(
+    annotation_country = str_extract(country, "\\d+/"),
+    annotation_year = str_extract(end, "\\d+/"),
+    
+    # Remove annotations from country and end
+    country = str_trim(str_remove(country, "\\s*\\d+/")),
+    end = str_trim(str_remove(end, "\\s*\\d+/"))
+  ) |> 
+  
+  # Replace "..." in end with 2025
+  mutate(
+    end = ifelse(end == "…", "2025", end)
+  ) |> 
+  
+  # Convert end to numeric
+  mutate(
+    end = as.numeric(end)
+  )
+
+# Remove duplicates
+
+crises_merged <- crises |> 
+  arrange(country, start) |> 
+  group_by(country) |> 
+  
+  # start a new crisis group whenever there is a gap
+  mutate(
+    new_group = if_else(
+      start > lag(end, default = first(start) - 2) + 1,
+      1L,
+      0L
+    ),
+    crisis_group = cumsum(new_group)
+  ) |> 
+  
+  group_by(country, crisis_group) |> 
+  summarise(
+    start = min(start),
+    end   = max(end),
+    .groups = "drop"
+  )
+
+# crisis years
+crisis_years <- crises_merged |> 
+  rowwise() |> 
+  mutate(year = list(start:end)) |> 
+  unnest(year) |> 
+  select(country, year) |> 
+  mutate(crisis = 1)
+
+crisis_start <- crises_merged |> 
+  mutate(
+    country,
+    year = start,
+    crisis_start = 1,
+    .keep = "none"
+  )
+
+
 ## 2.2 BIS ===================================================================
 
-### 2.2.1 Loans ==============================================================
+# Loans
 credit_bis <- read.csv("data/raw/WS_TC_csv_col.csv")
 
-credit_bis_long <- credit_bis |> 
+credit_bis_clean <- credit_bis |> 
+  clean_names() |> 
   pivot_longer(
-    cols = starts_with("X"),
-    names_to = "Time",
-    values_to = "Value" 
+    cols = starts_with("x"),
+    names_to = "time",
+    values_to = "value" 
   ) |> 
   filter(
-    Unit.type == "Domestic currency (incl. conv. to current ccy made using a fix parity)", 
-    Valuation.method == "Market value",
-    Adjustment == "Adjusted for breaks",
-    Borrowing.sector %in% c("Private non-financial sector", "Households & NPISHs", "Non-financial corporations"),
+    unit_type_2 == "Domestic currency (incl. conv. to current ccy made using a fix parity)", 
+    valuation_method == "Market value",
+    adjustment == "Adjusted for breaks",
+    borrowing_sector %in% c("Private non-financial sector", "Households & NPISHs", "Non-financial corporations"),
     # Year end value
-    str_detect(Time, "Q4")
+    str_detect(time, "q4")
   ) |> 
   mutate(
-    Year = as.integer(str_extract(Time, "\\d{4}")),
+    year = as.integer(str_extract(time, "\\d{4}")),
     # Add country codes
-    iso3c = countrycode(Borrowers..country, origin = "country.name", destination = "iso3c")
+    iso3c = countrycode(borrowers_country, origin = "country.name", destination = "iso3c")
   ) |> 
-  select(c(Borrowing.sector, Lending.sector, Year, Value, iso3c)) |> 
+  select(c(borrowing_sector, lending_sector, year, value, iso3c)) |> 
   pivot_wider( 
-    names_from = Lending.sector,
-    values_from = Value
+    names_from = lending_sector,
+    values_from = value
   ) |> 
   pivot_wider(
-    names_from = Borrowing.sector,
+    names_from = borrowing_sector,
     values_from = c(`All sectors`, `Banks, domestic`)
   ) |> 
   mutate(
-    Year,
+    year,
     iso3c,
     tloanscorp = `All sectors_Non-financial corporations`,
     tloanspriv = `All sectors_Private non-financial sector`,
@@ -120,11 +193,10 @@ credit_bis_long <- credit_bis |>
     .keep = "none"
   )
 
-### 2.2.2 Credit-to-GDP ratio =============================================
-
+# Credit-to-GDP ratio
 cgdp_bis <- read_csv("data/raw/WS_CREDIT_GAP_csv_col.csv")
 
-cgdp_bis_long <- cgdp_bis |> 
+cgdp_bis_clean <- cgdp_bis |> 
   pivot_longer(
     cols = !(FREQ:Series),
     names_to = "Time",
@@ -136,16 +208,15 @@ cgdp_bis_long <- cgdp_bis |>
     `Credit gap data type` == "Credit-to-GDP ratios (actual data)"
   ) |> 
   mutate(
-    Year = as.integer(str_extract(Time, "\\d{4}")),
+    year = as.integer(str_extract(Time, "\\d{4}")),
     iso3c = countrycode(`Borrowers' country`, origin = "country.name", destination = "iso3c")
   ) |> 
-  select(c(iso3c, Year, cgdppriv))
+  select(c(iso3c, year, cgdppriv))
 
-### 2.2.3 Consumer Price Index / Inflation ====================================
-
+# Consumer Price Index / Inflation 
 bis_cpi <- read_csv("data/raw/WS_LONG_CPI_csv_col.csv")
 
-bis_cpi_long <- bis_cpi |> 
+bis_cpi_clean <- bis_cpi |> 
   pivot_longer(
     cols = !(FREQ:Series),
     names_to = "Year",
@@ -158,51 +229,49 @@ bis_cpi_long <- bis_cpi |>
   ) |> 
   select(c(`Reference area`, inflation, Year)) |> 
   mutate(
-    Year = as.integer(Year),
+    year = as.integer(Year),
     iso3c = countrycode(`Reference area`, origin = "country.name", destination = "iso3c"),
     inflation,
     .keep = "none"
   )
 
-### 2.2.4 Property Prices =====================================================
-
+# Property Prices
 bis_propprices <- read_csv("data/raw/WS_SPP_csv_col.csv")
 
-bis_propprices_long <- bis_propprices |>
+bis_propprices_clean <- bis_propprices |>
   pivot_longer(
     cols = !(FREQ:Series),
     names_to = "Time",
     values_to = "Price"
   ) |> 
-  mutate(Year = as.integer(str_extract(Time, "\\d{4}"))) |>
+  mutate(year = as.integer(str_extract(Time, "\\d{4}"))) |>
   filter(
     `Unit of measure` == "Year-on-year changes, in per cent",
     Value == "Real",
-    Year >= "1970",
+    year >= "1970",
     !(`Reference area` %in% c("Advanced economies", "Euro area", "World", "Emerging market economies (aggregate)"))
-  )
-
-# Annualize quarterly data
-bis_propprices_long_annual <- bis_propprices_long |>
-  summarize(ppgrowth = mean(Price, na.rm = TRUE), .by = c(REF_AREA, Year, Value)) |> 
+  ) |> 
+  # annualize quarterly data
+  summarize(ppgrowth = mean(Price, na.rm = TRUE), .by = c(REF_AREA, year, Value)) |> 
   mutate(iso3c = countrycode(REF_AREA, origin = "iso2c", destination = "iso3c")) |> 
   select(- c(REF_AREA, Value))
+  
 
 ## 2.3 Eurostat ===============================================================
 str_eurostat <- read_xlsx("data/raw/str_eurostat.xlsx", sheet = 2, skip = 7, na = c("", "NA", ":"))
 
-str_eurostat_long <- str_eurostat |> 
+str_eurostat_clean <- str_eurostat |> 
   select(-starts_with("..")) |> 
   slice(2:20) |> 
   mutate(`1970` = as.numeric(`1970`)) |> 
   pivot_longer(
     cols = !TIME,
-    names_to = "Year",
+    names_to = "year",
     values_to = "str_eurostat"
   ) |> 
   mutate(
     iso3c = countrycode(TIME, origin = "country.name", destination = "iso3c"),
-    Year = as.integer(Year),
+    year = as.integer(year),
     str_eurostat,
     .keep = "none"
   )
@@ -224,7 +293,7 @@ gdd_clean <- clean_data(gdd, indicator_col = "indicator") |>
     "corpdebt" = debt_instruments_non_financial_corporations_percent_of_gdp,
     "hdebt" = debt_instruments_households_percent_of_gdp,
     "ggovdebt" = debt_instruments_general_government_percent_of_gdp,
-    "cgovdebt" = debt_instruments_central_government_percent_of_gdp
+    "govcgdp" = debt_instruments_central_government_percent_of_gdp
   )
 
 ### 2.4.2 Africa Regional Economic Outlook (AFRREO) ===========================
@@ -270,11 +339,21 @@ weo_clean <- clean_data(weo, indicator_col = "indicator") |>
     "inflation" = all_items_consumer_price_index_cpi_period_average_percent_change,
     "govcgdp" = gross_debt_general_government_percent_of_gdp,
     "bcagdp" = current_account_balance_credit_less_debit_percent_of_gdp
+  ) |> 
+  mutate(
+    ngdpmil = ngdpbil * 1000,
+    ngdp = ngdpbil * 1000000000
   )
 
 ### 2.4.4 Public Finances in Modern History (PFMH) ==============================
-pfmh <- read_xlsx("data/raw/PFMH.xlsx") |> 
-  rename("iso3c" = isocode)
+pfmh <- read_xlsx("data/raw/PFMH.xlsx")
+
+pfmh_clean <- pfmh |> 
+  rename(
+    "iso3c" = isocode,
+    "rgdpgrowth" = rgc,
+    "govcgdp_pfmh" = d
+  )
 
 ### 2.4.5 Monetary Financial Statistics (MFS) ===================================
 
@@ -320,9 +399,7 @@ bmoney_mfs <- read_csv("data/raw/IMF_MFS_BroadMoney.csv")
 
 bmoney_mfs_clean <- bmoney_mfs |> 
   clean_names() |> 
-  filter(
-    !(indicator %in% c("Broad Money, Seasonally adjusted (SA)", "Broad Money, M5"))
-  ) |> 
+  filter(!(indicator %in% c("Broad Money, Seasonally adjusted (SA)", "Broad Money, M5"))) |> 
   clean_data(indicator_col = "indicator")
 
 
@@ -345,8 +422,9 @@ sp_mfs_clean <- clean_data(sp_mfs, indicator_col = "type_of_transformation") |>
   rename(
     "sppa" = period_average_index,
     "speop" = end_of_period_eo_p_index
-  )
-
+  ) |> 
+  # Choose the longest mfs share price series (period avrg. vs end-of-period)
+  combine_longest_series("sp", c("sppa", "speop"))
 
 ### 2.4.6 National Economic Accounts (NEA) ================================
 nea <- read_csv("data/raw/nea.csv")
@@ -355,6 +433,13 @@ nea_clean <- clean_data(nea, indicator_col = "price_type") |>
   rename(
     "ngdp" = current_prices,
     "rgdp" = constant_prices
+  ) |> 
+  arrange(iso3c, year) |> 
+  group_by(iso3c) |> 
+  mutate(
+    ngdpmil = ngdp / 1000000,
+    ngdpbil = ngdp / 1000000000,
+    rgdpgrowth = (log(rgdp) - lag(log(rgdp))) * 100
   )
 
 ## 2.5 OECD =========================================================
@@ -412,158 +497,75 @@ pp_oecd_clean <- pp_oecd_clean |>
 wdi1 <- read_csv("data/raw/wdi1.csv", na = c("", "NA", ".."))
 wdi2 <- read_csv("data/raw/wdi2.csv", na = c("", "NA", ".."))
 
-wdi1_long <- wdi1 |> 
+wdi1_clean <- wdi1 |> 
   slice_head(n = -5) |> 
-  pivot_longer(
-    cols = !(`Country Name`:`Series Code`),
-    names_to = "Year",
-    values_to = "Value"
+  clean_data(indicator_col = "series_name", country_col = country_name) |> 
+  rename(
+    "bm" = broad_money_current_lcu,
+    "bmtr" = broad_money_to_total_reserves_ratio,
+    "bmgrowth" = broad_money_growth_annual_percent,
+    "bmgdp" = broad_money_percent_of_gdp
   ) |> 
   mutate(
-    iso3c = `Country Code`,
-    `Series Name`,
-    Year = as.integer(str_extract(Year, "\\d{4}")),
-    Value,
-    .keep = "none"
-  ) |> 
-  pivot_wider(
-    names_from = `Series Name`,
-    values_from = Value
-  ) |> 
-  rename(
-    "bm" = `Broad money (current LCU)`,
-    "bmtr" = `Broad money to total reserves ratio`,
-    "bmgrowth" = `Broad money growth (annual %)`,
-    "bmgdp" = `Broad money (% of GDP)`
+    bm = bm / 1000000
   )
 
-
-wdi2_long <- wdi2 |> 
+wdi2_clean <- wdi2 |> 
   slice_head(n = -5) |> 
-  pivot_longer(
-    cols = !(`Country Name`:`Series Code`),
-    names_to = "Year",
-    values_to = "Value"
+  clean_data(indicator_col = "series_name", country_col = country_name) |> 
+  rename(
+    "nfa" = net_foreign_assets_current_lcu,
+    "bcagdp_wdi" = current_account_balance_percent_of_gdp,
+    "ngdp" = gdp_current_lcu,
+    "cgdppriv" = domestic_credit_to_private_sector_percent_of_gdp,
+    "bcgdpriv" = domestic_credit_to_private_sector_by_banks_percent_of_gdp,
+    "trd" = total_reserves_includes_gold_current_us,
+    "inflation" = inflation_consumer_prices_annual_percent
   ) |> 
   mutate(
-    iso3c = `Country Code`,
-    `Series Name`,
-    Year = as.integer(str_extract(Year, "\\d{4}")),
-    Value,
-    .keep = "none"
-  ) |> 
-  pivot_wider(
-    names_from = `Series Name`,
-    values_from = Value
-  ) |> 
-  rename(
-    "nfa" = `Net foreign assets (current LCU)`,
-    "bcagdp_wdi" = `Current account balance (% of GDP)`,
-    "ngdp" = `GDP (current LCU)`,
-    "cgdppriv" = `Domestic credit to private sector (% of GDP)`,
-    "bcgdpriv" = `Domestic credit to private sector by banks (% of GDP)`,
-    "trd" = `Total reserves (includes gold, current US$)`,
-    "inflation" = `Inflation, consumer prices (annual %)`
+    ngdpmil = ngdp / 1000000,
+    ngdpbil = ngdp / 1000000000,
+    nfa_wdi = nfa / 1000000
   )
 
 ### 2.6.2 Global Financial Development (GFD) =============================
 gfd <- read_csv("data/raw/gfd.csv", na = c("", "NA", ".."), locale = locale(encoding = "Latin1"))
 
-gfd_long <-  gfd |>
-  # Remove last five rows
-  slice_head(n = -5) |>  
-  pivot_longer(
-    cols = !(`Country Name`:`Series Code`),
-    names_to = "Year",
-    values_to = "Value"
-  ) |> 
-  select(`Country Code`, `Series Name`, Year, Value) |> 
-  pivot_wider(
-    names_from = `Series Name`,
-    values_from = Value
-  ) |> 
-  mutate(
-    iso3c = `Country Code`,
-    Year = as.integer(str_extract(Year, "^\\d{4}")),
-    spr = `Stock market return (%, year-on-year)`,
-    ltd = `Bank credit to bank deposits (%)`,
-    bmgdp = `Liquid liabilities to GDP (%)`,
-    .keep = "none"
+gfd_clean <- gfd |> 
+  slice_head(n = -5) |> 
+  clean_data(indicator_col = "series_name", country_col = country_name) |> 
+  rename(
+    "spr" = stock_market_return_percent_year_on_year,
+    "ltd" = bank_credit_to_bank_deposits_percent,
+    "bmgdp" = liquid_liabilities_to_gdp_percent
   )
 
 ## 2.7 Jordà-Schularick-Taylor Macrohistory Database (JST) ====================
 jst <- read_xlsx("data/raw/JSTdatasetR6.xlsx")
 
+jst_clean <- jst |> 
+  rename(
+    "iso3c" = iso,
+    "str_jst" = stir,
+    "ltr_jst" = ltrate
+  )
+
+# 3 Save cleaned datasets =====================================================
+
+clean_names <- ls(pattern = "_clean$")
+
+walk(clean_names, ~ write_rds(get(.x), file.path("data/interim", paste0(.x, ".rds"))))
+
+write_rds(x = crises_merged, file = "data/interim/crises_merged.rds")
+write_rds(x = crisis_start, file = "data/interim/crisis_start.rds")
+write_rds(x = crisis_years, file = "data/interim/crisis_years.rds")
+
+message("Step 1a: Cleaned data saved to data/interim/")
+
+
 ## 2.2 Banking Crises Data =================================================
 
-# Select important columns
-crises <- crises |> 
-  select(Country, Start, End)
 
-
-crises <- crises |> 
-  
-  # Remove rows that contain NA in column "Start"
-  filter(!is.na(Start)) |> 
-  
-  # Extract annotation symbols (e.g. "6/")
-  mutate(
-    annotation_country = str_extract(Country, "\\d+/"),
-    annotation_year = str_extract(End, "\\d+/"),
-    
-    # Remove annotations from Country and End
-    Country = str_trim(str_remove(Country, "\\s*\\d+/")),
-    End = str_trim(str_remove(End, "\\s*\\d+/"))
-  ) |> 
-  
-  # Replace "..." in End with 2025
-  mutate(
-    End = ifelse(End == "…", "2025", End)
-  ) |> 
-  
-  # Convert End to numeric
-  mutate(
-    End = as.numeric(End)
-  )
-
-# Remove duplicates
-
-crises_merged <- crises |> 
-  arrange(Country, Start) |> 
-  group_by(Country) |> 
-  
-  # Start a new crisis group whenever there is a gap
-  mutate(
-    new_group = if_else(
-      Start > lag(End, default = first(Start) - 2) + 1,
-      1L,
-      0L
-    ),
-    crisis_group = cumsum(new_group)
-  ) |> 
-  
-  group_by(Country, crisis_group) |> 
-  summarise(
-    Start = min(Start),
-    End   = max(End),
-    .groups = "drop"
-  )
-
-# Crisis years
-crisis_years <- crises_merged |> 
-  rowwise() |> 
-  mutate(Year = list(Start:End)) |> 
-  unnest(Year) |> 
-  select(Country, Year) |> 
-  mutate(Crisis = 1)
-
-crisis_start <- crises_merged |> 
-  mutate(
-    Country,
-    Year = Start,
-    Crisis_Start = 1,
-    .keep = "none"
-  )
 
 ## 2.3 Create country-year panel ============================================
 
@@ -638,61 +640,72 @@ panel <- panel |>
 
 ### 2.4.1 Nominal ======================================================
 
-# NEA
-gdp_nea <- nea_long |> 
-  select(-rgdp) |> 
-  mutate(
-    ngdpmil = ngdp / 1000000,
-    ngdpbil = ngdp / 1000000000
-  )
+# # NEA
+# gdp_nea <- nea_clean |> 
+#   select(-rgdp) |> 
+#   mutate(
+#     ngdpmil = ngdp / 1000000,
+#     ngdpbil = ngdp / 1000000000
+#   )
 
 # WEO
-gdp_weo <- weo_long |> 
-  filter(INDICATOR == "Gross domestic product (GDP), Current prices, Domestic currency") |> 
-  select(COUNTRY, Year, Value) |> 
-  mutate(
-    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
-    Year = as.integer(Year),
-    ngdpbil = Value,
-    ngdpmil = Value * 1000,
-    ngdp = Value * 1000000000,
-    .keep = "none"
-  )
+# gdp_weo <- weo_clean |> 
+#   filter(INDICATOR == "Gross domestic product (GDP), Current prices, Domestic currency") |> 
+#   select(COUNTRY, Year, Value) |> 
+#   mutate(
+#     iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
+#     Year = as.integer(Year),
+#     ngdpbil = Value,
+#     ngdpmil = Value * 1000,
+#     ngdp = Value * 1000000000,
+#     .keep = "none"
+#   )
 
 # WDI
-gdp_wdi <- wdi2_long |> 
-  select(Year, iso3c, ngdp) |> 
-  mutate(
-    ngdpmil = ngdp / 1000000,
-    ngdpbil = ngdp / 1000000000
-  )
+# gdp_wdi <- wdi2_clean |> 
+#   select(Year, iso3c, ngdp) |> 
+#   mutate(
+#     ngdpmil = ngdp / 1000000,
+#     ngdpbil = ngdp / 1000000000
+#   )
 
 
 # Combine datasets
-gdp_comb <- gdp_nea |> 
-  full_join(gdp_weo, by = c("iso3c", "Year"), suffix = c("_nea", "_weo")) |> 
-  full_join(gdp_wdi, by = c("iso3c", "Year")) |> 
+ngdp_comb <- nea_clean |> 
+  select(iso3c, year, ngdp, ngdpmil, ngdpbil) |> 
+  full_join(weo_clean |> select(iso3c, year, ngdp, ngdpmil, ngdpbil), by = c("iso3c", "year"), suffix = c("_nea", "_weo")) |> 
+  full_join(wdi2_clean |> select(iso3c, year, ngdp, ngdpmil, ngdpbil), by = c("iso3c", "year")) |> 
   rename(
     "ngdp_wdi" = ngdp,
     "ngdpmil_wdi" = ngdpmil,
     "ngdpbil_wdi" = ngdpbil
   )
 
+# 
+# gdp_comb <- gdp_nea |> 
+#   full_join(gdp_weo, by = c("iso3c", "Year"), suffix = c("_nea", "_weo")) |> 
+#   full_join(gdp_wdi, by = c("iso3c", "Year")) |> 
+#   rename(
+#     "ngdp_wdi" = ngdp,
+#     "ngdpmil_wdi" = ngdpmil,
+#     "ngdpbil_wdi" = ngdpbil
+#   )
+
 # Choose the longest series per country
 ngdp <- combine_longest_series(
-  gdp_comb,
+  ngdp_comb,
   "ngdp",
   c("ngdp_nea", "ngdp_weo", "ngdp_wdi")
 )
 
 ngdpmil <- combine_longest_series(
-  gdp_comb,
+  ngdp_comb,
   "ngdpmil",
   c("ngdpmil_nea", "ngdpmil_weo", "ngdpmil_wdi")
 )
 
 ngdpbil <- combine_longest_series(
-  gdp_comb,
+  ngdp_comb,
   "ngdpbil",
   c("ngdpbil_nea", "ngdpbil_weo", "ngdpbil_wdi")
 )
@@ -706,26 +719,33 @@ panel <- left_join(panel, ngdpbil |> select(iso3c, Year, ngdpbil), by = c("iso3c
 
 ### 2.4.2 Real Growth ==================================================
 
-rgdp_nea <- nea_long |> 
-  select(-ngdp) |> 
-  group_by(iso3c) |> 
-  mutate(rgdpgrowth = (log(rgdp) - lag(log(rgdp))) * 100)
+# rgdp_nea <- nea_clean |> 
+#   select(-ngdp) |> 
+#   group_by(iso3c) |> 
+#   mutate(rgdpgrowth = (log(rgdp) - lag(log(rgdp))) * 100)
 
-rgdp_pfmh <- pfmh |> 
-  select(isocode, year, rgc) |> 
-  rename(
-    "iso3c" = isocode,
-    "Year" = year,
-    "rgdpgrowth" = rgc
-  )
+# rgdp_pfmh <- pfmh |> 
+#   select(isocode, year, rgc) |> 
+#   rename(
+#     "iso3c" = isocode,
+#     "Year" = year,
+#     "rgdpgrowth" = rgc
+#   )
 
-rgdp_afrreo <- afrreo_long |> select(iso3c, Year, rgdpgrowth)
+rgdp_afrreo <- afrreo_clean |> select(iso3c, Year, rgdpgrowth)
 
 # Combine datasets
-rgdp_comb <- rgdp_nea |> 
-  full_join(rgdp_pfmh, by = c("iso3c", "Year"), suffix = c("_nea", "_pfmh")) |> 
-  full_join(rgdp_afrreo, by = c("iso3c", "Year")) |> 
+
+rgdp_comb <- nea_clean |> 
+  select(iso3c, year, rgdpgrowth) |> 
+  full_join(pfmh_clean |> select(iso3c, year, rgdpgrowth), by = c("iso3c", "year"), suffix = c("_nea", "_pfmh")) |> 
+  full_join(afrreo_clean |> select(iso3c, year, rgdpgrowth), by = c("iso3c", "year")) |> 
   rename("rgdpgrowth_afrreo" = "rgdpgrowth")
+
+# rgdp_comb <- rgdp_nea |> 
+#   full_join(rgdp_pfmh, by = c("iso3c", "Year"), suffix = c("_nea", "_pfmh")) |> 
+#   full_join(rgdp_afrreo, by = c("iso3c", "Year")) |> 
+#   rename("rgdpgrowth_afrreo" = "rgdpgrowth")
 
 # Choose the longest series per country
 
@@ -742,42 +762,28 @@ panel <- left_join(panel, rgdp_comb |> select(iso3c, Year, rgdpgrowth), by = c("
 
 ## 2.6 Inflation Data =================================================
 
+# cpi_weo_clean <- weo_clean |> 
+#   filter(INDICATOR == "All Items, Consumer price index (CPI), Period average, percent change") |> 
+#   mutate(
+#     iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
+#     Year = as.integer(Year),
+#     inflation = Value,
+#     .keep = "none"
+#   )
 
-
-
-
-
-
-cpi_weo_long <- weo_long |> 
-  filter(INDICATOR == "All Items, Consumer price index (CPI), Period average, percent change") |> 
-  mutate(
-    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
-    Year = as.integer(Year),
-    inflation = Value,
-    .keep = "none"
-  )
-
-inflation_wdi <- wdi2_long |> select(Year, iso3c, inflation)
+inflation_wdi <- wdi2_clean |> select(Year, iso3c, inflation)
 
 
 # Combine BIS and WEO
 
-infl_combined <- bis_cpi_long |> 
+infl_combined <- bis_cpi_clean |> 
   full_join(cpi_weo_long, by = c("iso3c", "Year"), suffix = c("_bis", "_weo")) |> 
   full_join(inflation_wdi, by = c("iso3c", "Year")) |> 
   rename("inflation_wdi" = inflation)
 
 # Choose the longest series per country
 
-infl_combined <- combine_longest_series(
-  infl_combined,
-  "inflation",
-  c(
-    "inflation_bis",
-    "inflation_weo",
-    "inflation_wdi"
-  )
-)
+infl_combined <- combine_longest_series(infl_combined, "inflation", c("inflation_bis", "inflation_weo", "inflation_wdi"))
 
 
 # Add to panel
@@ -785,21 +791,18 @@ infl_combined <- combine_longest_series(
 panel <- left_join(panel, infl_combined |> select(iso3c, Year, inflation), by = c("iso3c", "Year"))
 
 
-
-
 ## 2.5 Debt Variables ===============================================
 
 ### 2.5.1 Private Debt ===============================================
-
 
 # Credit to GDP ratio
 
 # Combine everything
 
-cgdp_comb <- cgdp_bis_long |> 
-  full_join(gdd_long |> select(cgdppriv, iso3c, Year), by = c("iso3c", "Year"), suffix = c("_bis", "_gdd")) |> 
-  full_join(afrreo_long |> select(cgdppriv, iso3c, Year), by = c("iso3c", "Year")) |> 
-  full_join(wdi2_long |> select(cgdppriv, iso3c, Year), by = c("iso3c", "Year"), suffix = c("_afrreo", "_wdi"))
+cgdp_comb <- cgdp_bis_clean |> 
+  full_join(gdd_clean |> select(cgdppriv, iso3c, Year), by = c("iso3c", "Year"), suffix = c("_bis", "_gdd")) |> 
+  full_join(afrreo_clean |> select(cgdppriv, iso3c, Year), by = c("iso3c", "Year")) |> 
+  full_join(wdi2_clean |> select(cgdppriv, iso3c, Year), by = c("iso3c", "Year"), suffix = c("_afrreo", "_wdi"))
 
 
 # Choose the longest series per country
@@ -819,7 +822,7 @@ cgdp_comb <- combine_longest_series(
 panel <- left_join(panel, cgdp_comb |> select(iso3c, Year, cgdppriv), by = c("iso3c", "Year"))
 
 # Corporate and household credit to GDP
-panel <- left_join(panel, gdd_long |> select(iso3c, Year, cgdpcorp, cgdph), by = c("iso3c", "Year"))
+panel <- left_join(panel, gdd_clean |> select(iso3c, Year, cgdpcorp, cgdph), by = c("iso3c", "Year"))
 
 
 # Create approximated credit column
@@ -835,7 +838,7 @@ credit_approx <- panel |>
   ) 
 
 # Combine actual credit dataset with approximated values
-credit_comb <- credit_bis_long |> 
+credit_comb <- credit_bis_clean |> 
   full_join(credit_approx, by = c("iso3c", "Year"))
 
 # # Check compatibility
@@ -895,34 +898,34 @@ panel <- left_join(panel, credit_comb |>  select(Year, iso3c, ends_with("rgrowth
 
 ### 2.5.2 Public Debt =================================================
 
-govcgdp_weo <- weo_long |> 
-  filter(INDICATOR == "Gross debt, General government, Percent of GDP") |> 
-  select(COUNTRY, INDICATOR, Year, Value) |> 
-  pivot_wider(
-    names_from = INDICATOR,
-    values_from = Value
-  ) |> 
-  mutate(
-    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
-    Year = as.integer(Year),
-    govcgdp_weo = `Gross debt, General government, Percent of GDP`,
-    .keep = "none"
-  ) |> 
-  filter(!is.na(iso3c))
+# govcgdp_weo <- weo_clean |> 
+#   filter(INDICATOR == "Gross debt, General government, Percent of GDP") |> 
+#   select(COUNTRY, INDICATOR, Year, Value) |> 
+#   pivot_wider(
+#     names_from = INDICATOR,
+#     values_from = Value
+#   ) |> 
+#   mutate(
+#     iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
+#     Year = as.integer(Year),
+#     govcgdp_weo = `Gross debt, General government, Percent of GDP`,
+#     .keep = "none"
+#   ) |> 
+#   filter(!is.na(iso3c))
 
-govcgdp_gdd <- gdd_long |> 
-  select(Year, iso3c, cgovdebt) |> 
-  rename(
-    "govcgdp_gdd" = cgovdebt
-  )
+# govcgdp_gdd <- gdd_clean |> 
+#   select(Year, iso3c, cgovdebt) |> 
+#   rename(
+#     "govcgdp_gdd" = cgovdebt
+#   )
 
-govcgdp_pfmh <- pfmh |> 
-  select(year, isocode, d) |> 
-  rename(
-    "Year" = year,
-    "iso3c" = isocode,
-    "govcgdp_pfmh" = d
-  )
+# govcgdp_pfmh <- pfmh |> 
+#   select(year, isocode, d) |> 
+#   rename(
+#     "Year" = year,
+#     "iso3c" = isocode,
+#     "govcgdp_pfmh" = d
+#   )
 
 # Combine Datasets
 
@@ -949,22 +952,22 @@ panel <- left_join(panel, govcgdp_comb |> select(iso3c, Year, govcgdp), by = c("
 ## 2.7 Current account balance (% of GDP) =============================
 
 # wdi
-bca_wdi_long <- wdi2_long |> select(c(Year, iso3c, bcagdp_wdi)) 
+bca_wdi_clean <- wdi2_clean |> select(c(Year, iso3c, bcagdp_wdi)) 
 
 # WEO
 
-bca_weo_long <- weo_long |> 
-  filter(INDICATOR == "Current account balance (credit less debit), Percent of GDP") |> 
-  select(COUNTRY, Year, Value) |> 
-  mutate(
-    iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
-    Year = as.integer(Year),
-    bca_weo = Value,
-    .keep = "none"
-  )
+# bca_weo_clean <- weo_clean |> 
+#   filter(INDICATOR == "Current account balance (credit less debit), Percent of GDP") |> 
+#   select(COUNTRY, Year, Value) |> 
+#   mutate(
+#     iso3c = countrycode(COUNTRY, origin = "country.name", destination = "iso3c"),
+#     Year = as.integer(Year),
+#     bca_weo = Value,
+#     .keep = "none"
+#   )
 
 # Combine datasets
-bca_comb <- bca_wdi_long |> 
+bca_comb <- bca_wdi_clean |> 
   full_join(bca_weo_long, by = c("iso3c", "Year"))
 
 # Choose the longest series per country
@@ -986,7 +989,7 @@ panel <- left_join(panel, bca_comb |> select(iso3c, Year, bcagdp), by = c("iso3c
 ## 2.8 Property Prices =======================================
 
 # Combine datasets
-pp_comb <- bis_propprices_long_annual |> 
+pp_comb <- bis_propprices_clean_annual |> 
   full_join(pp_oecd_long, by = c("iso3c", "Year"), suffix = c("_bis", "_oecd"))
 
 # Choose longest series
@@ -1007,17 +1010,13 @@ panel <- left_join(panel, pp_comb |> select(iso3c, Year, ppgrowth), by = c("iso3
 
 ## 2.9 Net foreign assets ===================================================
 
-nfa_wdi_long <- wdi2_long |> 
-  select(Year, iso3c, nfa) |> 
-  mutate(
-    nfa_wdi = nfa / 1000000,
-    Year,
-    iso3c,
-    .keep = "none")
-
-
-
-
+# nfa_wdi_clean <- wdi2_clean |> 
+#   select(Year, iso3c, nfa) |> 
+#   mutate(
+#     nfa_wdi = nfa / 1000000,
+#     Year,
+#     iso3c,
+#     .keep = "none")
 
 # Combine datasets
 
@@ -1058,26 +1057,27 @@ panel <- left_join(panel, nfa_combined |> select(Year, iso3c, nfagdp), by = c("i
 
 # IMF PFMH (Real government bond yield)
 
-pfmh_ltr <- pfmh |> 
-  select(isocode, year, rltir) |> 
-  rename(
-    "iso3c" = isocode,
-    "Year" = year
-  )
+# pfmh_ltr <- pfmh |> 
+#   select(isocode, year, rltir) |> 
+#   rename(
+#     "iso3c" = isocode,
+#     "Year" = year
+#   )
 
 # JST
-ir_jst <- jst |> 
-  select(year, iso, stir, ltrate) |> 
-  rename(
-    "Year" = year,
-    "iso3c" = iso,
-    "str_jst" = stir,
-    "ltr_jst" = ltrate
-  )
+
+# ir_jst <- jst |> 
+#   select(year, iso, stir, ltrate) |> 
+#   rename(
+#     "Year" = year,
+#     "iso3c" = iso,
+#     "str_jst" = stir,
+#     "ltr_jst" = ltrate
+#   )
 
 # Merge all datasets
 
-ir_comb <- ir_oecd_long |> 
+ir_comb <- ir_oecd_clean |> 
   full_join(mfs_str_long, by = c("iso3c", "Year")) |> 
   full_join(mfs_ltr_long, by = c("iso3c", "Year")) |> 
   full_join(str_eurostat_long, by = c("iso3c", "Year")) |> 
@@ -1098,10 +1098,10 @@ panel <- left_join(panel, ir_comb |> select(iso3c, Year, ycurve), by = c("iso3c"
 
 ## 2.11 Broad Money ========================================================
 
-bmoney_wdi_long <- wdi1_long |> 
-  select(-bmgrowth) |> 
-  mutate(
-    bm = bm / 1000000) 
+# bmoney_wdi_clean <- wdi1_clean |> 
+#   select(-bmgrowth) |> 
+#   mutate(
+#     bm = bm / 1000000) 
 
 # bmoney_jst <- jst |> 
 #   select(year, iso, money) |> 
@@ -1110,12 +1110,12 @@ bmoney_wdi_long <- wdi1_long |>
 #     "Year" = year
 #     )
 
-bmgdp_gfd <- gfd_long |> select(Year, iso3c, bmgdp)
+bmgdp_gfd <- gfd_clean |> select(Year, iso3c, bmgdp)
 
 
 # Combine datasets
 
-bmoney_combined <- bmoney_mfs_long |> 
+bmoney_combined <- bmoney_mfs_clean |> 
   full_join(bmoney_wdi_long, by = c("iso3c", "Year"), suffix = c("_mfs", "_wdi")) |>
   full_join(bmgdp_gfd, by = c("iso3c", "Year"), suffix = c("_wdi", "_gfd")) |> 
   # Nominal GDP for approximating broad money
@@ -1142,14 +1142,14 @@ bmoney_combined <- bmoney_combined |>
   full_join(bmgdp |> select(Year, iso3c, bmgdp), by = c("Year", "iso3c")) |>  
   mutate(bmoney_approx = bmgdp / 100 * ngdpmil)
 
-check <- bmoney_combined |> 
-  filter(!is.na(bmoney_wdi), !is.na(bmoney_approx)) |>
-  group_by(iso3c) |>
-  summarise(
-    mean_diff = mean(bmoney_wdi - bmoney_approx),
-    rmse = sqrt(mean((bmoney_wdi - bmoney_approx)^2)),
-    n = n()
-  )
+# check <- bmoney_combined |> 
+#   filter(!is.na(bmoney_wdi), !is.na(bmoney_approx)) |>
+#   group_by(iso3c) |>
+#   summarise(
+#     mean_diff = mean(bmoney_wdi - bmoney_approx),
+#     rmse = sqrt(mean((bmoney_wdi - bmoney_approx)^2)),
+#     n = n()
+#   )
 
 bmoney <- combine_longest_series(
   bmoney_combined,
@@ -1201,12 +1201,12 @@ panel <- left_join(panel, bmgdp |> select(Year, iso3c, bmgdp), by = c("iso3c", "
 
 ## 2.12 Loans-to-deposit ratio ===============================================
 
-ltd_gfd_long <- gfd_long |> select(Year, iso3c, ltd)
+ltd_gfd_clean <- gfd_clean |> select(Year, iso3c, ltd)
 
 ltd_jst <- jst |> select(year, iso, ltd) |> rename("Year" = year, "iso3c" = iso)
 
 # Combine datasets
-ltd_comb <- ltd_mfs_long |> 
+ltd_comb <- ltd_mfs_clean |> 
   full_join(ltd_gfd_long, by = c("iso3c", "Year"), suffix = c("_mfs", "_gfd")) |> 
   full_join(ltd_jst, by = c("iso3c", "Year")) |> 
   rename("ltd_jst" = ltd)
@@ -1231,7 +1231,7 @@ panel <- left_join(panel, ltd_comb |> select(iso3c, Year, ltd), by = c("iso3c", 
 ## 2.13 Share prices =========================================================
 
 # GFD
-spr_gfd <- gfd_long |> select(Year, iso3c, spr) |> rename("spr_gfd" = spr)
+spr_gfd <- gfd_clean |> select(Year, iso3c, spr) |> rename("spr_gfd" = spr)
 
 # OECD
 
@@ -1241,18 +1241,18 @@ spr_gfd <- gfd_long |> select(Year, iso3c, spr) |> rename("spr_gfd" = spr)
 
 # Choose the longest mfs share price series (period avrg. vs end-of-period)
 
-sp_mfs_long <- combine_longest_series(
-  sp_mfs_long,
-  "sp",
-  c(
-    "sppa",
-    "speop"
-  )
-)
+# sp_mfs_clean <- combine_longest_series(
+#   sp_mfs_long,
+#   "sp",
+#   c(
+#     "sppa",
+#     "speop"
+#   )
+# )
 
 # Combine datasets
-sp_comb <- sp_oecd_long |> 
-  full_join(sp_mfs_long |> select(Year, iso3c, sp), by = c("iso3c", "Year"), suffix = c("_oecd", "_mfs")) |> 
+sp_comb <- sp_oecd_clean |> 
+  full_join(sp_mfs_clean |> select(Year, iso3c, sp), by = c("iso3c", "Year"), suffix = c("_oecd", "_mfs")) |> 
   full_join(spr_gfd, by = c("iso3c", "Year")) |> 
   # Convert values of 0 into NA
   mutate(
