@@ -146,8 +146,9 @@ cgdppriv_comb <- combine_longest_series(
 cgdpprivsplit <- clean_data$gdd_clean |> select(year, iso3c, cgdpcorp, cgdph)
 
 # Create approximated credit column
-credit_approx <- clean_data$gdd_clean |> 
-  select(iso3c, year, cgdppriv, cgdpcorp, cgdph) |> 
+credit_approx <- cgdppriv_comb |> 
+  select(iso3c, year, cgdppriv) |> 
+  left_join(clean_data$gdd_clean |> select(iso3c, year, cgdpcorp, cgdph), by = c("iso3c", "year")) |> 
   left_join(ngdpbil, by = c("iso3c", "year")) |> 
   mutate(
     tlpriv_approx = cgdppriv / 100 * ngdpbil,

@@ -294,6 +294,12 @@ gdd_clean <- clean_data(gdd, indicator_col = "indicator") |>
     "hdebt" = debt_instruments_households_percent_of_gdp,
     "ggovdebt" = debt_instruments_general_government_percent_of_gdp,
     "govcgdp" = debt_instruments_central_government_percent_of_gdp
+  ) |> 
+  # Set Credit-to-GDP values of 0 as missing
+  mutate(
+    cgdppriv = na_if(cgdppriv, 0),
+    cgdpcorp = na_if(cgdpcorp, 0),
+    cgdph = na_if(cgdph, 0)
   )
 
 ### 2.4.2 Africa Regional Economic Outlook (AFRREO) ===========================
@@ -526,7 +532,9 @@ wdi2_clean <- wdi2 |>
     ngdpmil = ngdp / 1000000,
     ngdpbil = ngdp / 1000000000,
     nfa_wdi = nfa / 1000000
-  )
+  ) |> 
+  # Manually remove data errors (discovered after descriptive analysis)
+  mutate(nfa_wdi = if_else(iso3c %in% c("NLD", "ITA") & year == 2024, NA_real_, nfa_wdi))
 
 ### 2.6.2 Global Financial Development (GFD) =============================
 gfd <- read_csv("data/raw/gfd.csv", na = c("", "NA", ".."), locale = locale(encoding = "Latin1"))

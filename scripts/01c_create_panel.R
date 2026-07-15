@@ -3,11 +3,11 @@
 # Inputs:   All files in data/interim/indicators
 # Outputs:  data/final
 
-# 0 Load Packages ==========================================================
+# 1 Load Packages ==========================================================
 library(tidyverse)
 library(countrycode)
 
-# 1 Load indicators ========================================================
+# 2 Load indicators ========================================================
 
 ind.files <- list.files("data/interim/indicators", pattern = "\\.rds$", full.names = TRUE)
 
@@ -19,7 +19,7 @@ crisis_start <- read_rds("data/interim/cleaned_datasets/crisis_start.rds")
 crisis_years <- read_rds("data/interim/cleaned_datasets/crisis_years.rds")
 crises_merged <- read_rds("data/interim/cleaned_datasets/crises_merged.rds")
 
-# 2 Create country-year panel ==============================================
+# 3 Create country-year panel ==============================================
 
 # Country-Year Panel
 panel <- expand_grid(
@@ -82,7 +82,7 @@ panel <- panel |>
   mutate(advanced = if_else(iso3c %in% advanced, 1, 0))
 
 
-# 5 Add all indicators to the panel ==========================================
+# 4 Add all indicators to the panel ==========================================
 
 # Nominal GDP (in units, millions and billions)
 panel <- left_join(panel, indicators$ngdp |> select(iso3c, year, ngdp), by = c("iso3c", "year"))
@@ -130,6 +130,19 @@ panel <- left_join(panel, indicators$ltd_comb |> select(iso3c, year, ltd), by = 
 # Real Stock Price returns
 panel <- left_join(panel, indicators$sp_comb |> select(iso3c, year, sprr), by = c("iso3c", "year"))
 
+# 5 Save Panel =================================================================
 write_rds(panel, "data/final/panel.rds")
 
 message("Step 1c: Panel saved to data/interim/final")
+
+
+
+check <- panel |>
+  group_by(country) |>
+  summarise(
+    across(
+      - (year:advanced),
+      ~ sum(!is.na(.x)),
+      .names = "n_{.col}"
+      )
+)
