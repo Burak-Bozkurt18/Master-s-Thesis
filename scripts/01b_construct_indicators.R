@@ -1,7 +1,7 @@
-# Step 1b: Create final panel
+# Step 1b: Construct indicators
 # Purpose:  
-# Inputs:   All files in data/interim
-# Outputs:  data/interim/
+# Inputs:   All files in data/interim/cleaned_datasets
+# Outputs:  data/interim/indicators
 
 # 0 Load Packages ==========================================================
 library(tidyverse)
@@ -39,69 +39,6 @@ files <- list.files("data/interim/cleaned_datasets", pattern = "\\.rds$", full.n
 clean_data <- files |>
   set_names(tools::file_path_sans_ext(basename(files))) |>
   map(read_rds)
-
-# 3 Create country-year panel ============================================
-
-# Country-Year Panel
-panel <- expand_grid(
-  country = unique(clean_data$crises_merged$country),
-  year = 1970:2025
-)
-
-# Add country codes
-panel <- panel |> 
-  mutate(iso3c = countrycode(country, origin = "country.name", destination = "iso3c"))
-
-panel <- panel |> 
-  left_join(clean_data$crisis_years,
-            by = c("country", "year")) |> 
-  mutate(
-    crisis = replace_na(crisis, 0)
-  )
-
-panel <- panel |> 
-  left_join(clean_data$crisis_start,
-            by = c("country", "year")) |> 
-  mutate(
-    crisis_start = replace_na(crisis_start, 0)
-  )
-
-# Pre-crisis indicator
-panel <- panel |>
-  group_by(country) |>
-  arrange(year) |>
-  mutate(
-    precrisis2 = as.integer(
-      lead(crisis_start, 1, default = 0) +
-        lead(crisis_start, 2, default = 0) > 0
-    ),
-    precrisis3 = as.integer(
-      lead(crisis_start, 1, default = 0) +
-        lead(crisis_start, 2, default = 0) +
-        lead(crisis_start, 3, default = 0) > 0
-    ),
-    precrisis4 = as.integer(
-      lead(crisis_start, 1, default = 0) +
-        lead(crisis_start, 2, default = 0) +
-        lead(crisis_start, 3, default = 0) + 
-        lead(crisis_start, 4, default = 0) > 0
-    )
-  ) |>
-  ungroup() |> 
-  arrange(country)
-
-# Categorize countries in Advanced Economies and Emerging/Developing Economies
-advanced <- c(
-  "AUS", "AUT", "BEL", "CAN", "CHE", "CYP", "CZE",
-  "DEU", "DNK", "ESP", "EST", "FIN", "FRA", "GBR",
-  "GRC", "HRV", "IRL", "ISL", "ISR", "ITA", "JPN",
-  "KOR", "LTU", "LUX", "LVA", "MLT", "NLD", "NOR",
-  "NZL", "PRT", "SGP", "SVK", "SVN", "SWE", "USA"
-)
-
-panel <- panel |>
-  mutate(advanced = if_else(iso3c %in% advanced, 1, 0))
-
 
 # 4 Create indicators ==================================================
 
@@ -486,91 +423,9 @@ sp_comb <- sp_comb |>
 # 5 Save the constructed indicators ==========================================
 indicators <- ls(pattern = "_comb$")
 indicators <- indicators[!indicators %in% c("ngdp_comb", "bmoney_comb")]
-indicators <- c(indicators, "ngdp", "ngdpmil", "ngdpbil", "bmoney", "bmgdp")
+indicators <- c(indicators, "ngdp", "ngdpmil", "ngdpbil", "bmoney", "bmgdp", "cgdpprivsplit")
 
 walk(indicators, ~ write_rds(get(.x), file.path("data/interim/indicators", paste0(.x, ".rds"))))
 
 message("Step 1b: Constructed indicators saved to data/interim/indicators")
 
-# 5 Add all indicators to the panel ==========================================
-
-# Add to panel
-panel <- left_join(panel, ngdp |> select(iso3c, year, ngdp), by = c("iso3c", "year"))
-panel <- left_join(panel, ngdpmil |> select(iso3c, year, ngdpmil), by = c("iso3c", "year"))
-panel <- left_join(panel, ngdpbil |> select(iso3c, year, ngdpbil), by = c("iso3c", "year"))
-
-# Add to panel
-panel <- left_join(panel, rgdp_comb |> select(iso3c, year, rgdpgrowth), by = c("iso3c", "year"))
-
-# Add to panel
-panel <- left_join(panel, infl_comb |> select(iso3c, year, inflation), by = c("iso3c", "year"))
-
-# Add data to panel
-panel <- left_join(panel, cgdppriv_comb |> select(iso3c, year, cgdppriv), by = c("iso3c", "year"))
-
-# Corporate and household credit to GDP
-panel <- left_join(panel, cgdpprivsplit, by = c("iso3c", "year"))
-
-# Add to panel
-panel <- left_join(panel, credit_comb |>  select(year, iso3c, ends_with("rgrowth")), by = c("iso3c", "year"))
-
-# Add to panel
-panel <- left_join(panel, govcgdp_comb |> select(iso3c, year, govcgdp), by = c("iso3c", "year"))
-
-# Add to panel
-panel <- left_join(panel, bca_comb |> select(iso3c, year, bcagdp), by = c("iso3c", "year"))
-
-# Add to panel
-panel <- left_join(panel, pp_comb |> select(iso3c, year, ppgrowth), by = c("iso3c", "year"))
-
-# Add to panel
-panel <- left_join(panel, nfa_comb |> select(year, iso3c, nfagdp), by = c("iso3c", "year"))
-
-# Add variables to panel
-panel <- left_join(panel, ir_comb |> select(iso3c, year, ycurve), by = c("iso3c", "year"))
-
-# Add to panel
-panel <- left_join(panel, bmoney |> select(year, iso3c, bmtr, bm_rgrowth),
-                   by = c("iso3c", "year"))
-panel <- left_join(panel, bmgdp |> select(year, iso3c, bmgdp), by = c("iso3c", "year"))
-
-# Add to panel
-panel <- left_join(panel, ltd_comb |> select(iso3c, year, ltd), by = c("iso3c", "year"))
-
-# Add to panel
-panel <- left_join(panel, sp_comb |> select(iso3c, year, sprr), by = c("iso3c", "year"))
-
-
-
-## 2.14 Check how many obs ===================================================
-
-check <- panel |>
-  group_by(country) |>
-  summarise(
-    across(
-      - (year:precrisis4),
-      ~ sum(!is.na(.x)),
-      .names = "n_{.col}"
-    )
-  )
-
-sort(colSums(check[,-1]), decreasing = T)
-
-panel |> 
-  select(cgdppriv, rgdpgrowth, inflation, govcgdp, bcagdp, bmgdp, ltd, nfagdp) |> 
-  complete.cases() |> 
-  sum()
-
-predictors <- c(
-  "cgdppriv", "rgdpgrowth", "inflation", "govcgdp", "bcagdp", "bmgdp", "ltd", "nfagdp"
-)
-
-panel_complete <- panel |> 
-  filter(if_all(all_of(predictors), ~ !is.na(.)), crisis != 1) 
-
-panel_complete |> 
-  summarize(
-    n_precrisis2 = sum(precrisis2),
-    n_precrisis3 = sum(precrisis3),
-    n_precrisis4 = sum(precrisis4)
-  )
