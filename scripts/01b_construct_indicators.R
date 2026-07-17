@@ -453,7 +453,7 @@ sp_comb <- sp_comb |>
 # 5 Save the constructed indicators ==========================================
 indicators <- ls(pattern = "_comb$")
 indicators <- indicators[!indicators %in% c("ngdp_comb", "bmoney_comb")]
-indicators <- c(indicators, "ngdp", "ngdpmil", "ngdpbil", "bmoney", "bmgdp", "cgdpprivsplit")
+indicators <- c(indicators, "bmoney", "bmgdp", "cgdpprivsplit")
 
 walk(indicators, ~ write_rds(get(.x), file.path("data/interim/indicators", paste0(.x, ".rds"))))
 

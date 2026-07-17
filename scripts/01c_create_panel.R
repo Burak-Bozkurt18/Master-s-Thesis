@@ -85,9 +85,9 @@ panel <- panel |>
 # 4 Add all indicators to the panel ==========================================
 
 # Nominal GDP (in units, millions and billions)
-panel <- left_join(panel, indicators$ngdp |> select(iso3c, year, ngdp), by = c("iso3c", "year"))
-panel <- left_join(panel, indicators$ngdpmil |> select(iso3c, year, ngdpmil), by = c("iso3c", "year"))
-panel <- left_join(panel, indicators$ngdpbil |> select(iso3c, year, ngdpbil), by = c("iso3c", "year"))
+# panel <- left_join(panel, indicators$ngdp |> select(iso3c, year, ngdp), by = c("iso3c", "year"))
+# panel <- left_join(panel, indicators$ngdpmil |> select(iso3c, year, ngdpmil), by = c("iso3c", "year"))
+# panel <- left_join(panel, indicators$ngdpbil |> select(iso3c, year, ngdpbil), by = c("iso3c", "year"))
 
 # Real GDP growth
 panel <- left_join(panel, indicators$rgdp_comb |> select(iso3c, year, rgdpgrowth), by = c("iso3c", "year"))

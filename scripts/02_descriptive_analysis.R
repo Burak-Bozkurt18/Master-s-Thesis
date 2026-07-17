@@ -7,7 +7,7 @@
 
 library(tidyverse)
 library(tidymodels)
-library(stargazer)
+library(modelsummary)
 
 # 2 Load Panel ===============================================================
 
@@ -23,13 +23,46 @@ panel |>
     legend.title = element_blank()
   )
 
-stargazer(
-  as.data.frame(panel) |> select(!(year:ngdpbil)), 
-  type = "text", 
-  title="Descriptive statistics", 
-  digits = 1,
-  median = T
-)
+datasummary_skim(panel |> select(!(year:advanced)))
+
+datasummary(~  N * advanced * precrisis3,
+            data = panel |> mutate(advanced = factor(advanced), precrisis3 = factor(precrisis3)))
+
+panel |> datasummary(formula = All(panel |> select(!(year:advanced))) ~ N + Mean + SD + Min + Median + Max)
+
+panel_expl <- panel |> 
+  rename(
+    "Real GDP growth (%)" = rgdpgrowth,
+    "Inflation (%)" = inflation,
+    "Total Private Credit (% of GDP)" = cgdppriv,
+    "Corporate Credit (% of GDP)" = cgdpcorp,
+    "Household Credit (% of GDP)" = cgdph,
+    "Total Private Credit Growth (%)" = tlpriv_rgrowth,
+    "Corporate Credit Growth (%)" = tlcorp_rgrowth,
+    "Household Credit Growth (%)" = tlh_rgrowth,
+    "Bank Private Credit Growth (%)" = blpriv_rgrowth,
+    "Public Debt (% of GDP)" = govcgdp,
+    "Current Account Balance (% of GDP)" = bcagdp,
+    "Real Property Price growth (%)" = ppgrowth,
+    "Net Foreign Assets (% of GDP)" = nfagdp,
+    "Yield Curve" = ycurve,
+    "Broad Money (% of Total Reserves)" = bmtr,
+    "Broad Money growth (%)" = bm_rgrowth,
+    "Broad Money (% of GDP)" = bmgdp,
+    "Loans to Deposit (%)" = ltd,
+    "Stock Price Returns (%)" = sprr
+  )
+
+panel_expl |> 
+  filter(advanced == 0) |> 
+  select(!(country:advanced)) |> 
+  datasummary_skim()
+
+
+panel_expl |> 
+  filter(advanced == 1) |> 
+  select(!(country:advanced)) |> 
+  datasummary_skim()
 
 # 4 Estimate Models ==========================================================
 
