@@ -136,13 +136,54 @@ write_rds(panel, "data/final/panel.rds")
 message("Step 1c: Panel saved to data/interim/final")
 
 
+# Appendix =====================================================================
 
-check <- panel |>
-  group_by(country) |>
-  summarise(
-    across(
-      - (year:advanced),
-      ~ sum(!is.na(.x)),
-      .names = "n_{.col}"
-      )
-)
+
+# Check how many observations each country has for each indicator
+
+# check <- panel |>
+#   group_by(country) |>
+#   summarise(
+#     across(
+#       - (year:advanced),
+#       ~ sum(!is.na(.x)),
+#       .names = "n_{.col}"
+#       )
+# )
+
+
+# Identify outliers and structural breaks
+
+# find_large_changes <- function(data) {
+#   
+#   vars <- data |>
+#     select(where(is.numeric), -year) |>
+#     names()
+#   
+#   map_dfr(vars, function(var) {
+#     
+#     data |>
+#       arrange(iso3c, year) |>
+#       group_by(iso3c) |>
+#       mutate(
+#         change = abs(.data[[var]] - lag(.data[[var]]))
+#       ) |>
+#       ungroup() |>
+#       slice_max(change, n = 20, with_ties = FALSE) |>
+#       transmute(
+#         variable = var,
+#         iso3c,
+#         year,
+#         value = .data[[var]],
+#         change
+#       )
+#   })
+# }
+# large_changes <- find_large_changes(panel)
+# 
+# large_changes |> 
+#   filter(!(variable %in% c("crisis", "crisis_start", "precrisis2", "precrisis3", "precrisis4", "advanced", "ngdpmil", "ngdpbil", "inflation"))) |> 
+#   View()
+# 
+# panel |> filter(iso3c %in% c("MKD", "MNG", "TUR", "JAM", "ISL", "BGD", "UKR")) |> ggplot(aes(x = year, y = sprr, col = iso3c)) + geom_line( linewidth = 1)
+# 

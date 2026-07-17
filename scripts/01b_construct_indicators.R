@@ -100,6 +100,14 @@ rgdp_comb <- combine_longest_series(
   c("rgdpgrowth_nea", "rgdpgrowth_pfmh", "rgdpgrowth_afrreo")
 )
 
+# Manual corrections
+rgdp_comb <- rgdp_comb |> 
+  # Replace implausible observation for Bangladesh in 2016 by the more plausible value from PFMH
+  mutate(rgdpgrowth = if_else(iso3c %in% "BGD" & year == 2016, rgdpgrowth_pfmh, rgdpgrowth)) |> 
+  # Set implausible observations to NA
+  mutate(rgdpgrowth = if_else(iso3c %in% "EGY" & year == 2020, NA_real_, rgdpgrowth)) |> 
+  mutate(rgdpgrowth = if_else(iso3c %in% "BLR" & (year == 2018 | year == 2022), NA_real_, rgdpgrowth)) 
+
 ## 2.6 Inflation Data =================================================
 
 inflation_wdi <- clean_data$wdi2_clean |> select(year, iso3c, inflation)
@@ -145,6 +153,10 @@ cgdppriv_comb <- combine_longest_series(
 # Corporate and household credit-to-GDP ratio
 cgdpprivsplit <- clean_data$gdd_clean |> select(year, iso3c, cgdpcorp, cgdph)
 
+# Manually remove implausible values
+cgdpprivsplit <- cgdpprivsplit |> 
+  mutate(cgdph = if_else(iso3c %in% "IND" & year >= 1998 & year <= 2006, NA_real_, cgdph))
+
 # Create approximated credit column
 credit_approx <- cgdppriv_comb |> 
   select(iso3c, year, cgdppriv) |> 
@@ -188,10 +200,10 @@ credit_comb <- credit_comb |>
   arrange(iso3c, year) |> 
   group_by(iso3c) |> 
   mutate(
-    tlpriv_rgrowth = tlpriv_growth - inflation,
-    tlcorp_rgrowth = tlcorp_growth - inflation,
-    tlh_rgrowth = tlh_growth - inflation,
-    blpriv_rgrowth = blpriv_growth - inflation
+    tlpriv_rgrowth = ((1 + tlpriv_growth/100) / (1 + inflation/100) - 1) * 100,
+    tlcorp_rgrowth = ((1 + tlcorp_growth/100) / (1 + inflation/100) - 1) * 100,
+    tlh_rgrowth = ((1 + tlh_growth/100) / (1 + inflation/100) - 1) * 100,
+    blpriv_rgrowth = ((1 + blpriv_growth/100) / (1 + inflation/100) - 1) * 100
   ) |> 
   ungroup()
 
@@ -319,6 +331,15 @@ bmgdp <- combine_longest_series(
   sources = c("bmgdp_wdi", "bmgdp_gfd")
 )
 
+# Manually correct breaks and errors
+bmgdp <- bmgdp |> 
+  # Replace the WDI bmgdp series by the GFD series for Sierra Leone
+  mutate(bmgdp = if_else(iso3c %in% "SLE", bmgdp_gfd, bmgdp)) |> 
+  # Set implausible bmgdp value for Luxembourg in 1993 to NA
+  mutate(bmgdp = if_else(iso3c %in% "LUX" & year == 1993, NA_real_, bmgdp)) |> 
+  # Set implausible bmgdp values for Spain from 1997 to 2000 to NA
+  mutate(bmgdp = if_else(iso3c %in% "ESP" & year >= 1997 & year <= 2000, NA_real_, bmgdp))
+
 # Approximate broad money
 bmoney_comb <- bmoney_comb |> 
   full_join(bmgdp |> select(year, iso3c, bmgdp), by = c("year", "iso3c")) |>  
@@ -341,6 +362,14 @@ bmoney <- combine_longest_series(
 #     )
 #   )
 
+# Manual corrections
+bmoney <- bmoney |> 
+  mutate(
+    # Set implausible bmtr values for Sierra Leone to NA
+    bmtr = if_else(iso3c %in% "SLE" & year >= 2001 & year <= 2014, NA_real_, bmtr),
+    # Replace implausible bmoney values for Sierra Leone by the approximation
+    bmoney = if_else(iso3c %in% "SLE", bmoney_approx, bmoney)
+    ) 
 
 # Calculate broad money growth rate
 
@@ -357,7 +386,7 @@ bmoney <- bmoney |>
   arrange(iso3c, year) |>
   group_by(iso3c) |>
   mutate(
-    bm_rgrowth = bmgrowth - inflation
+    bm_rgrowth = ((1 + bmgrowth/100) / (1 + inflation/100) - 1) * 100
   )
 
 ## 2.12 Loans-to-deposit ratio ===============================================
@@ -418,7 +447,7 @@ sp_comb <- sp_comb |>
   left_join(infl_comb |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
   arrange(iso3c, year) |> 
   group_by(iso3c) |> 
-  mutate(sprr = spr - inflation) |> 
+  mutate(sprr = ((1 + spr/100) / (1 + inflation/100) - 1) * 100) |> 
   ungroup()
 
 # 5 Save the constructed indicators ==========================================
