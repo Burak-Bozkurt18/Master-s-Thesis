@@ -497,6 +497,19 @@ pp_oecd_clean <- pp_oecd_clean |>
   group_by(iso3c) |> 
   mutate(ppgrowth = (log(pp) - lag(log(pp))) * 100)
 
+# Exchange Rates
+er_oecd <- read_xlsx("data/raw/er_oecd.xlsx", skip = 4)
+
+er_oecd_clean <- er_oecd |> 
+  clean_names() |> 
+  slice_head(n = -2) |> 
+  slice_tail(n = -1) |> 
+  select(-c(time_period_2, last_col())) |> 
+  rename("country" = time_period_1) |> 
+  clean_data() |> 
+  rename("er_lc_usd" = value)
+
+
 ## 2.6 World Bank ==================================================
 
 ### 2.6.1 World Development Indicators (WDI) =======================
@@ -531,7 +544,8 @@ wdi2_clean <- wdi2 |>
   mutate(
     ngdpmil = ngdp / 1000000,
     ngdpbil = ngdp / 1000000000,
-    nfa_wdi = nfa / 1000000
+    nfa_wdi = nfa / 1000000,
+    trd = trd / 1000000
   ) |> 
   # Manually remove data errors (discovered after descriptive analysis)
   mutate(nfa_wdi = if_else(iso3c %in% c("NLD", "ITA") & year == 2024, NA_real_, nfa_wdi))

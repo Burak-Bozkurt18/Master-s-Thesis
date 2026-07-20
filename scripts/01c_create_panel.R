@@ -120,9 +120,9 @@ panel <- left_join(panel, indicators$nfa_comb |> select(year, iso3c, nfagdp), by
 panel <- left_join(panel, indicators$ir_comb |> select(iso3c, year, ycurve), by = c("iso3c", "year"))
 
 # Broad money to total reserves, real broad money growth and broad money to GDP
-panel <- left_join(panel, indicators$bmoney |> select(year, iso3c, bmtr, bm_rgrowth),
-                   by = c("iso3c", "year"))
-panel <- left_join(panel, indicators$bmgdp |> select(year, iso3c, bmgdp), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$bm_comb |> select(year, iso3c, bm_rgrowth), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$bmgdp_comb |> select(year, iso3c, bmgdp), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$bmtr_comb |> select(year, iso3c, bmtr), by = c("iso3c", "year"))
 
 # Loans-to-Deposit ratio
 panel <- left_join(panel, indicators$ltd_comb |> select(iso3c, year, ltd), by = c("iso3c", "year"))

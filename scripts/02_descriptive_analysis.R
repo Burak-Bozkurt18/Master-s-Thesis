@@ -32,37 +32,43 @@ panel |> datasummary(formula = All(panel |> select(!(year:advanced))) ~ N + Mean
 
 panel_expl <- panel |> 
   rename(
-    "Real GDP growth (%)" = rgdpgrowth,
-    "Inflation (%)" = inflation,
-    "Total Private Credit (% of GDP)" = cgdppriv,
-    "Corporate Credit (% of GDP)" = cgdpcorp,
-    "Household Credit (% of GDP)" = cgdph,
-    "Total Private Credit Growth (%)" = tlpriv_rgrowth,
-    "Corporate Credit Growth (%)" = tlcorp_rgrowth,
-    "Household Credit Growth (%)" = tlh_rgrowth,
-    "Bank Private Credit Growth (%)" = blpriv_rgrowth,
-    "Public Debt (% of GDP)" = govcgdp,
-    "Current Account Balance (% of GDP)" = bcagdp,
-    "Real Property Price growth (%)" = ppgrowth,
-    "Net Foreign Assets (% of GDP)" = nfagdp,
+    "Real GDP growth (\\%)" = rgdpgrowth,
+    "Inflation (\\%)" = inflation,
+    "Total Private Credit (\\% of GDP)" = cgdppriv,
+    "Corporate Credit (\\% of GDP)" = cgdpcorp,
+    "Household Credit (\\% of GDP)" = cgdph,
+    "Total Private Credit Growth (\\%)" = tlpriv_rgrowth,
+    "Corporate Credit Growth (\\%)" = tlcorp_rgrowth,
+    "Household Credit Growth (\\%)" = tlh_rgrowth,
+    "Bank Private Credit Growth (\\%)" = blpriv_rgrowth,
+    "Public Debt (\\% of GDP)" = govcgdp,
+    "Current Account Balance (\\% of GDP)" = bcagdp,
+    "Real Property Price growth (\\%)" = ppgrowth,
+    "Net Foreign Assets (\\% of GDP)" = nfagdp,
     "Yield Curve" = ycurve,
-    "Broad Money (% of Total Reserves)" = bmtr,
-    "Broad Money growth (%)" = bm_rgrowth,
-    "Broad Money (% of GDP)" = bmgdp,
-    "Loans to Deposit (%)" = ltd,
-    "Stock Price Returns (%)" = sprr
+    "Broad Money (\\% of Total Reserves)" = bmtr,
+    "Broad Money growth (\\%)" = bm_rgrowth,
+    "Broad Money (\\% of GDP)" = bmgdp,
+    "Loans to Deposit (\\%)" = ltd,
+    "Stock Price Returns (\\%)" = sprr
   )
-
-panel_expl |> 
-  filter(advanced == 0) |> 
-  select(!(country:advanced)) |> 
-  datasummary_skim()
-
 
 panel_expl |> 
   filter(advanced == 1) |> 
   select(!(country:advanced)) |> 
   datasummary_skim()
+
+
+panel_expl |> 
+  select(!(country:advanced)) |> 
+  datasummary_skim(
+    fun_numeric = list(N = NUnique, Mean = Mean, SD = SD, Min = Min, Median = Median, Max = Max),
+    output = "latex")
+
+panel_expl |> 
+  filter(advanced == 1) |> 
+  select(!c((country:precrisis3), advanced)) |> 
+  datasummary_balance(formula = ~ precrisis4, output = "latex")
 
 # 4 Estimate Models ==========================================================
 

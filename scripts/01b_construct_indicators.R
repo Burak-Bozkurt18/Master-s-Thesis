@@ -309,30 +309,36 @@ ir_comb <- clean_data$ir_oecd_clean |>
 
 ## 2.11 Broad Money ========================================================
 
-bmgdp_gfd <- clean_data$gfd_clean |> select(year, iso3c, bmgdp)
 
-# Combine datasets
-bmoney_comb <- clean_data$bmoney_mfs_clean |> 
-  full_join(clean_data$wdi1_clean, by = c("iso3c", "year"), suffix = c("_mfs", "_wdi")) |>
-  full_join(bmgdp_gfd, by = c("iso3c", "year"), suffix = c("_wdi", "_gfd")) |> 
-  # Nominal GDP for approximating broad money
-  left_join(ngdpmil |> select(iso3c, year, ngdpmil), by = c("iso3c", "year")) |> 
-  # full_join(bmoney_jst, by = c("iso3c", "year")) |> 
-  rename(
-    "bmoney_mfs" = broad_money,
-    "bmoney_wdi" = bm
-    # "bmoney_jst" = money
-  )
+# # Combine datasets
+# bmoney_comb <- clean_data$bmoney_mfs_clean |> 
+#   full_join(clean_data$wdi1_clean, by = c("iso3c", "year")) |>
+#   full_join(bmgdp_gfd, by = c("iso3c", "year"), suffix = c("_wdi", "_gfd")) |> 
+#   # Nominal GDP for approximating broad money
+#   left_join(ngdpmil |> select(iso3c, year, ngdpmil), by = c("iso3c", "year")) |> 
+#   # full_join(bmoney_jst, by = c("iso3c", "year")) |> 
+#   rename(
+#     "bmoney_mfs" = broad_money,
+#     "bmoney_wdi" = bm
+#     # "bmoney_jst" = money
+#   )
+
+# Broad Money to GDP
+
+bmgdp_gfd <- clean_data$gfd_clean |> select(year, iso3c, bmgdp)
+bmgdp_wdi <- clean_data$wdi1_clean |> select(iso3c, year, bmgdp)
+bmgdp_comb <- bmgdp_gfd |> 
+  full_join(bmgdp_wdi, by = c("iso3c", "year"), suffix = c("_gfd", "_wdi"))
 
 # Choose the longest series per country
-bmgdp <- combine_longest_series(
-  data = bmoney_comb,
+bmgdp_comb <- combine_longest_series(
+  data = bmgdp_comb,
   indicator = "bmgdp",
   sources = c("bmgdp_wdi", "bmgdp_gfd")
 )
 
 # Manually correct breaks and errors
-bmgdp <- bmgdp |> 
+bmgdp_comb <- bmgdp_comb |> 
   # Replace the WDI bmgdp series by the GFD series for Sierra Leone
   mutate(bmgdp = if_else(iso3c %in% "SLE", bmgdp_gfd, bmgdp)) |> 
   # Set implausible bmgdp value for Luxembourg in 1993 to NA
@@ -340,48 +346,78 @@ bmgdp <- bmgdp |>
   # Set implausible bmgdp values for Spain from 1997 to 2000 to NA
   mutate(bmgdp = if_else(iso3c %in% "ESP" & year >= 1997 & year <= 2000, NA_real_, bmgdp))
 
-# Approximate broad money
-bmoney_comb <- bmoney_comb |> 
-  full_join(bmgdp |> select(year, iso3c, bmgdp), by = c("year", "iso3c")) |>  
-  mutate(bmoney_approx = bmgdp / 100 * ngdpmil)
+# Broad Money
 
-bmoney <- combine_longest_series(
-  data = bmoney_comb,
-  indicator = "bmoney",
-  sources = c("bmoney_mfs", "bmoney_wdi", "bmoney_approx")
+bm_mfs <- clean_data$bmoney_mfs_clean |> rename("bm" = broad_money)
+bm_wdi <- clean_data$wdi1 |> select(iso3c, year, bm)
+
+# Combine datasets
+bm_comb <- bm_mfs |> 
+  full_join(bm_wdi, by = c("iso3c", "year"), suffix = c("_mfs", "_wdi"))
+
+# Approximate broad money
+bm_comb <- bm_comb |> 
+  full_join(bmgdp_comb |> select(year, iso3c, bmgdp), by = c("year", "iso3c")) |> 
+  left_join(ngdpmil |> select(iso3c, year, ngdpmil), by = c("iso3c", "year")) |> 
+  mutate(bm_approx = bmgdp / 100 * ngdpmil)
+
+# Choose longest series
+bm_comb <- combine_longest_series(
+  data = bm_comb,
+  indicator = "bm",
+  sources = c("bm_mfs", "bm_wdi", "bm_approx")
 )
 
-# # Rescale the JST broad money values for CAN, FRA, DEU and ITA from billions to millions 
-# bmoney <- bmoney |>
-#   mutate(
-#     bmoney = if_else(
-#       source == "bmoney_jst" &
-#         iso3c %in% c("CAN", "FRA", "DEU", "ITA"),
-#       bmoney * 1000,
-#       bmoney
-#     )
-#   )
-
 # Manual corrections
-bmoney <- bmoney |> 
+bm_comb <- bm_comb |> 
+  mutate(
+    # Replace implausible bmoney values for Sierra Leone by the approximation
+    bm = if_else(iso3c %in% "SLE", bm_approx, bm)
+    ) 
+
+# Broad Money to Total Reserves
+
+bmtr <- clean_data$wdi1_clean |> select(iso3c, year, bmtr) |> rename("bmtr_wdi" = bmtr)
+tr <- clean_data$wdi2_clean |> select(iso3c, year, trd)
+
+# Compute Broad money to total reserves ratio for remaining countries (especially Euro Countries)
+bmtr_comb <- bmtr |> 
+  full_join(tr, by = c("iso3c", "year")) |> 
+  full_join(bm_comb |> select(year, iso3c, bm), by = c("iso3c", "year")) |> 
+  # Exchange Rate Domestic Currency per USD
+  left_join(clean_data$er_oecd_clean, by = c("iso3c", "year")) |> 
+  mutate(
+    # Convert total reserves to local currency
+    tr = trd * er_lc_usd, 
+    # Calculate Broad Money to total reserves ratio
+    bmtr_constr = bm / tr
+    ) 
+
+# Choose longest series
+bmtr_comb <- combine_longest_series(
+  data = bmtr_comb,
+  indicator = "bmtr",
+  sources = c("bmtr_wdi", "bmtr_constr")
+)
+
+# Manual Corrections
+bmtr_comb <- bmtr_comb |> 
   mutate(
     # Set implausible bmtr values for Sierra Leone to NA
-    bmtr = if_else(iso3c %in% "SLE" & year >= 2001 & year <= 2014, NA_real_, bmtr),
-    # Replace implausible bmoney values for Sierra Leone by the approximation
-    bmoney = if_else(iso3c %in% "SLE", bmoney_approx, bmoney)
-    ) 
+    bmtr = if_else(iso3c %in% "SLE" & year >= 2001 & year <= 2014, NA_real_, bmtr) 
+  )
 
 # Calculate broad money growth rate
 
-bmoney <- bmoney |>
+bm_comb <- bm_comb |>
   arrange(iso3c, year) |>
   group_by(iso3c) |>
   mutate(
-    bmgrowth = (log(bmoney) - lag(log(bmoney))) * 100
+    bmgrowth = (log(bm) - lag(log(bm))) * 100
   )
 
 # Calculate real broad money growth
-bmoney <- bmoney |>
+bm_comb <- bm_comb |>
   left_join(infl_comb |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
   arrange(iso3c, year) |>
   group_by(iso3c) |>
@@ -452,8 +488,8 @@ sp_comb <- sp_comb |>
 
 # 5 Save the constructed indicators ==========================================
 indicators <- ls(pattern = "_comb$")
-indicators <- indicators[!indicators %in% c("ngdp_comb", "bmoney_comb")]
-indicators <- c(indicators, "bmoney", "bmgdp", "cgdpprivsplit")
+indicators <- indicators[!indicators %in% c("ngdp_comb")]
+indicators <- c(indicators, "cgdpprivsplit")
 
 walk(indicators, ~ write_rds(get(.x), file.path("data/interim/indicators", paste0(.x, ".rds"))))
 
