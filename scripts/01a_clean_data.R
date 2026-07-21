@@ -537,7 +537,7 @@ wdi2_clean <- wdi2 |>
     "bcagdp_wdi" = current_account_balance_percent_of_gdp,
     "ngdp" = gdp_current_lcu,
     "cgdppriv" = domestic_credit_to_private_sector_percent_of_gdp,
-    "bcgdpriv" = domestic_credit_to_private_sector_by_banks_percent_of_gdp,
+    "bcgdppriv" = domestic_credit_to_private_sector_by_banks_percent_of_gdp,
     "trd" = total_reserves_includes_gold_current_us,
     "inflation" = inflation_consumer_prices_annual_percent
   ) |> 

@@ -95,14 +95,20 @@ panel <- left_join(panel, indicators$rgdp_comb |> select(iso3c, year, rgdpgrowth
 # Inflation
 panel <- left_join(panel, indicators$infl_comb |> select(iso3c, year, inflation), by = c("iso3c", "year"))
 
-# Private Credit-to-GDP ratio
+# Total Private Credit-to-GDP ratio
 panel <- left_join(panel, indicators$cgdppriv_comb |> select(iso3c, year, cgdppriv), by = c("iso3c", "year"))
+
+# Bank Private Credit-to-GDP ratio
+panel <- left_join(panel, indicators$bcgdppriv_comb |> select(iso3c, year, bcgdppriv), by = c("iso3c", "year"))
 
 # Corporate and household Credit-to-GDP ratio
 panel <- left_join(panel, indicators$cgdpprivsplit, by = c("iso3c", "year"))
 
-# Real credit growth
+# Real Total credit growth
 panel <- left_join(panel, indicators$credit_comb |>  select(year, iso3c, ends_with("rgrowth")), by = c("iso3c", "year"))
+
+# Real Bank credit growth
+panel <- left_join(panel, indicators$blpriv_comb |> select(year, iso3c, blpriv_rgrowth), by = c("iso3c", "year"))
 
 # Government Credit-to-GDP ratio
 panel <- left_join(panel, indicators$govcgdp_comb |> select(iso3c, year, govcgdp), by = c("iso3c", "year"))
@@ -150,6 +156,33 @@ message("Step 1c: Panel saved to data/interim/final")
 #       .names = "n_{.col}"
 #       )
 # )
+# 
+# sort(colSums(check[,-1]), decreasing = T)
+
+
+# panel |> 
+#   select(cgdppriv, rgdpgrowth, inflation, govcgdp, bcagdp, bmgdp, ltd, nfagdp) |> 
+#   complete.cases() |> 
+#   sum()
+# 
+# predictors <- c(
+#   "cgdppriv", "rgdpgrowth", "inflation", "govcgdp", "bcagdp", "bmgdp", "ltd", "nfagdp"
+# )
+# 
+# panel_complete <- panel |> 
+#   filter(if_all(all_of(predictors), ~ !is.na(.)), Crisis != 1) 
+# 
+# panel_complete |> 
+#   summarize(
+#     n_precrisis2 = sum(PreCrisis2),
+#     n_precrisis3 = sum(PreCrisis3),
+#     n_precrisis4 = sum(PreCrisis4)
+#   )
+
+
+
+
+
 
 
 # Identify outliers and structural breaks

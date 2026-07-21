@@ -128,7 +128,7 @@ infl_comb <- combine_longest_series(infl_comb, "inflation", c("inflation_bis", "
 
 ### 2.5.1 Private Debt ===============================================
 
-# Credit to GDP ratio
+# Total Credit to GDP ratio
 
 # Combine everything
 
@@ -173,6 +173,8 @@ credit_approx <- cgdppriv_comb |>
 
 # Combine actual credit dataset with approximated values
 credit_comb <- clean_data$credit_bis_clean |> 
+  # exclude bank loans, they are relevant later
+  select(-bloanspriv) |> 
   full_join(credit_approx, by = c("iso3c", "year"))
 
 # Fill in missing values in tloanspriv with the approximated values
@@ -190,8 +192,7 @@ credit_comb <- credit_comb |>
   mutate(
     tlpriv_growth = (log(tlpriv) - lag(log(tlpriv))) * 100,
     tlcorp_growth = (log(tlcorp) - lag(log(tlcorp))) * 100,
-    tlh_growth = (log(tlh) - lag(log(tlh))) * 100,
-    blpriv_growth = (log(bloanspriv) - lag(log(bloanspriv))) * 100
+    tlh_growth = (log(tlh) - lag(log(tlh))) * 100
   )
 
 # Calculate real credit growth
@@ -202,12 +203,62 @@ credit_comb <- credit_comb |>
   mutate(
     tlpriv_rgrowth = ((1 + tlpriv_growth/100) / (1 + inflation/100) - 1) * 100,
     tlcorp_rgrowth = ((1 + tlcorp_growth/100) / (1 + inflation/100) - 1) * 100,
-    tlh_rgrowth = ((1 + tlh_growth/100) / (1 + inflation/100) - 1) * 100,
-    blpriv_rgrowth = ((1 + blpriv_growth/100) / (1 + inflation/100) - 1) * 100
+    tlh_rgrowth = ((1 + tlh_growth/100) / (1 + inflation/100) - 1) * 100
   ) |> 
   ungroup()
 
+# Bank Credit
 
+bcgdppriv <- clean_data$wdi2_clean |> select(iso3c, year, bcgdppriv)
+blpriv <- clean_data$credit_bis_clean |> select(iso3c, year, bloanspriv)
+
+bl <- bcgdppriv |> 
+  full_join(blpriv, by = c("iso3c", "year")) |> 
+  full_join(ngdpbil |> select(iso3c, year, ngdpbil), by = c("iso3c", "year")) |> 
+  mutate(
+    # Construct Bank Loans to GDP ratio
+    bcgdppriv_constr = bloanspriv / ngdpbil * 100,
+    # Approximate Bank Loans
+    blpriv_approx = bcgdppriv / 100 * ngdpbil
+  ) |> 
+  rename(
+    "bcgdppriv_wdi" = bcgdppriv,
+    "blpriv_bis" = bloanspriv
+  )
+
+# Choose longest series
+
+bcgdppriv_comb <- combine_longest_series(
+  data = bl,
+  indicator = "bcgdppriv",
+  # The constructed values are better because BIS is more trustworthy than WDI
+  sources = c("bcgdppriv_constr", "bcgdppriv_wdi")
+)
+
+blpriv_comb <- combine_longest_series(
+  data = bl,
+  indicator = "blpriv",
+  # The BIS values are more plausible than the approximated values
+  sources = c("blpriv_bis", "blpriv_approx")
+)
+
+# Calculate bank credit growth
+blpriv_comb <- blpriv_comb |> 
+  arrange(iso3c, year) |> 
+  group_by(iso3c) |> 
+  mutate(
+    blpriv_growth = (log(blpriv) - lag(log(blpriv))) * 100
+  )
+
+# Calculate real bank credit growth
+blpriv_comb <- blpriv_comb |> 
+  left_join(infl_comb |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
+  arrange(iso3c, year) |> 
+  group_by(iso3c) |> 
+  mutate(
+    blpriv_rgrowth = ((1 + blpriv_growth/100) / (1 + inflation/100) - 1) * 100
+  ) |> 
+  ungroup()
 
 ### 2.5.2 Public Debt =================================================
 
