@@ -6,7 +6,6 @@
 # 1 Load Packages =============================================================
 
 library(tidyverse)
-library(tidymodels)
 library(modelsummary)
 
 # 2 Load Panel ===============================================================
@@ -83,22 +82,3 @@ panel_expl |>
   filter(advanced == 1) |> 
   select(!c((country:precrisis3), advanced)) |> 
   datasummary_balance(formula = ~ precrisis4, output = "latex")
-
-# 4 Estimate Models ==========================================================
-
-## 4.1 Logit ================================================================
-
-model1 <- panel |> 
-  filter(Crisis != 1) |> 
-  glm(formula = PreCrisis3 ~ factor(iso3c) + cgdppriv, family = binomial())
-
-summary(model1)
-
-log_spec <- logistic_reg() |>
-  set_engine("glm")
-
-log_fit <- logistic_reg() |> 
-  set_engine("glm") |> 
-  fit(factor(PreCrisis3) ~ factor(iso3c) + cgdppriv, data = filter(panel, Crisis != 1))
-
-log_fit$fit$coefficients
