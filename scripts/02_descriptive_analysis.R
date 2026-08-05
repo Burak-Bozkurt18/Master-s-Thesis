@@ -13,15 +13,34 @@ library(modelsummary)
 
 panel <- read_rds("data/final/panel.rds")
 
-# 3 Descriptive Analysis =====================================================
+# 3 Set Theme ================================================================
+
+theme_set(
+  theme_minimal() +
+    theme(
+      text = element_text(family = "serif", size = 12),
+      plot.title = element_blank(),
+      axis.text = element_text(size = 12, colour = "black"),
+      axis.line = element_line(linewidth = 0.5),
+      axis.ticks = element_line(linewidth = 0.5),
+      panel.grid = element_line(linetype = "dashed")
+    )
+)
+
+par(family = "serif")
+
+# 4 Descriptive Analysis =====================================================
 
 panel |> 
-  ggplot(aes(x = year, y = crisis_start, fill = factor(advanced))) +
+  ggplot(aes(x = year, y = crisis, fill = factor(advanced))) +
   geom_col() + 
   theme(
     legend.position = "bottom",
-    legend.title = element_blank()
-  )
+    legend.title = element_blank(),
+    axis.title.x = element_blank()
+  ) +
+  scale_fill_manual(labels = c("Emerging and Developing Economies", "Advanced Economies"), values = c("#F8766D", "#00BFC4")) +
+  labs(y = "Number of Crises")
 
 datasummary_skim(panel |> select(!(year:advanced)))
 
