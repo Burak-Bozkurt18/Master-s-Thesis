@@ -9,6 +9,9 @@ library(tidyverse)
 library(tidymodels)
 library(modelsummary)
 library(fixest)
+library(lmtest)
+library(sandwich)
+library(marginaleffects)
 
 # 2 Load Panel ===============================================================
 
@@ -40,10 +43,51 @@ panel_fe <- panel |>
   filter(any(precrisis3 == 1)) |> 
   ungroup()
 
-model1 <- panel_fe |> 
-  glm(formula = precrisis3 ~ factor(iso3c) + cgdppriv, family = binomial())
+panel_fe2 <- panel |> 
+  group_by(country) |> 
+  filter(crisis != 1, !is.na(cgdppriv), !is.na(cgdph), !is.na(cgdpcorp)) |> 
+  filter(any(precrisis3 == 1)) |> 
+  ungroup()
 
-summary(model1)
-modelsummary(model1)
-# Driscoll-Kraay Standard Errors
-se_felogit_DK = se(model1, vcov = "DK")
+models <- list()
+
+models[["Logit1"]] <- panel_fe |> 
+  mutate(iso3c = factor(iso3c)) |> 
+  glm(formula = precrisis3 ~ iso3c + cgdppriv, family = binomial())
+
+models[["Logit2"]] <- panel_fe2 |> 
+  glm(formula = precrisis3 ~ factor(iso3c) + cgdppriv + cgdph + cgdpcorp, family = binomial())
+
+modelsummary(models, coef_omit = "^factor", stars = T, vcov = ~iso3c)
+
+# 2. Calculate clustered standard errors and test coefficients
+coeftest(models$Logit2, vcov = vcovCL, cluster = ~ iso3c)
+
+
+ame <- avg_slopes(models$Logit1)
+
+
+
+model <- panel_fe |> 
+  mutate(iso3c = factor(iso3c)) |> 
+  feglm(
+    precrisis3 ~ cgdppriv | iso3c,
+    family = "binomial"
+    )
+
+ame <- avg_slopes(model)
+
+
+
+panel_fe_all <- panel |> 
+  drop_na() |> 
+  group_by(country) |> 
+  filter(crisis != 1) |> 
+  filter(any(precrisis3 == 1)) |> 
+  ungroup()
+
+model_all <- panel_fe_all |> 
+  select(iso3c, precrisis3, rgdpgrowth:sprr) |> 
+  glm(formula =  precrisis3 ~ factor(iso3c) + . -iso3c, family = binomial())
+
+summary(model_all)
