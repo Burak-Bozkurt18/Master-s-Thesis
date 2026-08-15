@@ -41,12 +41,9 @@ panel |>
   scale_fill_manual(labels = c("Emerging and Developing Economies", "Advanced Economies"), values = c("#F8766D", "#00BFC4")) +
   labs(y = "Number of Crises")
 
-datasummary_skim(panel |> select(!(year:advanced)))
-
 datasummary(~  N * advanced * precrisis3,
             data = panel |> mutate(advanced = factor(advanced), precrisis3 = factor(precrisis3)))
 
-panel |> datasummary(formula = All(panel |> select(!(year:advanced))) ~ N + Mean + SD + Min + Median + Max)
 
 panel_expl <- panel |> 
   rename(
@@ -70,7 +67,15 @@ panel_expl <- panel |>
     "Broad Money (\\% of GDP)" = bmgdp,
     "Loans to Deposit (\\%)" = ltd,
     "Stock Price Returns (\\%)" = sprr
-  )
+  ) |> 
+  mutate(advanced = factor(advanced))
+
+panel_expl |> 
+  datasummary(formula = All(panel_expl |> select(!(year:advanced))) ~ N + Mean + SD + Min + Median + Max)
+
+panel_expl |> 
+  datasummary(formula = All(panel_expl |> select(!(year:advanced))) ~ advanced * (N + Mean))
+
 
 panel_expl |> 
   select(!(country:advanced)) |> 
@@ -82,3 +87,46 @@ panel_expl |>
   filter(advanced == 1) |> 
   select(!c((country:precrisis3), advanced)) |> 
   datasummary_balance(formula = ~ precrisis4, output = "latex")
+
+
+
+
+
+
+
+## Restricted Sample
+
+x_vars <- colnames(panel)[10:29]
+
+# Percentage coverage of observations per variable
+coverage <- panel_restricted |>
+  group_by(advanced) |> 
+  summarise(
+    across(
+      all_of(x_vars),
+      ~ mean(!is.na(.)) * 100
+    )
+  ) |>
+  pivot_longer(
+    cols = !advanced,
+    names_to = "variable",
+    values_to = "coverage_pct"
+  ) |>
+  pivot_wider(
+    names_from = advanced,
+    values_from = coverage_pct
+  ) |> 
+  arrange(desc(`0`))
+
+coverage
+
+# Coverage per row in %
+panel_mod <- panel |>
+  mutate(
+    n_available = rowSums(!is.na(across(all_of(x_vars)))),
+    coverage = n_available / length(x_vars)
+  )
+
+# Drop rows with variable coverage less than 50%
+panel_restricted <- panel_mod |>
+  filter(coverage >= 0.50)
