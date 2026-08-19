@@ -85,19 +85,20 @@ ngdpbil <- combine_longest_series(
 rgdp_nea <- clean_data$nea_clean |> select(iso3c, year, rgdpgrowth)
 rgdp_pfmh <- clean_data$pfmh_clean |> select(iso3c, year, rgdpgrowth)
 rgdp_afrreo <- clean_data$afrreo_clean |> select(iso3c, year, rgdpgrowth)
+rgdp_wdi <- clean_data$wdi2_clean |> select(iso3c, year, rgdpgrowth)
 
 # Combine datasets
 
 rgdp_comb <- rgdp_nea |>
   full_join(rgdp_pfmh, by = c("iso3c", "year"), suffix = c("_nea", "_pfmh")) |>
   full_join(rgdp_afrreo, by = c("iso3c", "year")) |>
-  rename("rgdpgrowth_afrreo" = "rgdpgrowth")
+  full_join(rgdp_wdi, by = c("iso3c", "year"), suffix = c("_afrreo", "_wdi"))
 
 # Choose the longest series per country
 rgdp_comb <- combine_longest_series(
   rgdp_comb,
   "rgdpgrowth",
-  c("rgdpgrowth_nea", "rgdpgrowth_pfmh", "rgdpgrowth_afrreo")
+  c("rgdpgrowth_nea", "rgdpgrowth_pfmh", "rgdpgrowth_afrreo", "rgdpgrowth_wdi")
 )
 
 # Manual corrections
@@ -264,7 +265,7 @@ blpriv_comb <- blpriv_comb |>
 
 # Combine Datasets
 
-govcgdp_gdd <- clean_data$gdd_clean |> select(iso3c, year, govcgdp)
+govcgdp_gdd <- clean_data$gdd_clean |> select(iso3c, year, govcgdp, ggovdebt) |> rename("ggovdebt_gdd" = ggovdebt)
 govcgdp_pfmh <- clean_data$pfmh_clean |> select(iso3c, year, govcgdp_pfmh)
 govcgdp_weo <- clean_data$weo_clean |> select(iso3c, year, govcgdp)
 
@@ -277,7 +278,7 @@ govcgdp_comb <- govcgdp_gdd |>
 govcgdp_comb <- combine_longest_series(
   data = govcgdp_comb,
   indicator = "govcgdp",
-  sources = c("govcgdp_weo", "govcgdp_pfmh", "govcgdp_gdd")
+  sources = c("govcgdp_weo", "govcgdp_pfmh", "govcgdp_gdd", "ggovdebt_gdd")
 )
 
 ## 2.7 Current account balance (% of GDP) =============================
@@ -295,7 +296,7 @@ bca_comb <- bca_wdi |>
 bca_comb <- combine_longest_series(
   data = bca_comb,
   indicator = "bcagdp",
-  sources = c("bcagdp_wdi", "bcagdp_weo")
+  sources = c("bcagdp_weo", "bcagdp_wdi")
 )
 
 ## 2.8 Property Prices =======================================
