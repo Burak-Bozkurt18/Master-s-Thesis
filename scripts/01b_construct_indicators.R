@@ -80,6 +80,11 @@ ngdpbil <- combine_longest_series(
   c("ngdpbil_nea", "ngdpbil_weo", "ngdpbil_wdi")
 )
 
+# Fill missing values with values from the other sources
+ngdp <- ngdp |> mutate(ngdp = coalesce(ngdp, ngdp_nea, ngdp_weo, ngdp_wdi))
+ngdpmil <- ngdpmil |> mutate(ngdpmil = coalesce(ngdpmil, ngdpmil_nea, ngdpmil_weo, ngdpmil_wdi))
+ngdpbil <- ngdpbil |> mutate(ngdpbil = coalesce(ngdpbil, ngdpbil_nea, ngdpbil_weo, ngdpbil_wdi))
+
 ### 2.4.2 Real Growth ==================================================
 
 rgdp_nea <- clean_data$nea_clean |> select(iso3c, year, rgdpgrowth)
@@ -101,13 +106,13 @@ rgdp_comb <- combine_longest_series(
   c("rgdpgrowth_nea", "rgdpgrowth_pfmh", "rgdpgrowth_afrreo", "rgdpgrowth_wdi")
 )
 
+# Fill missing values with values from the other sources
+rgdp_comb <- rgdp_comb |> mutate(rgdpgrowth = coalesce(rgdpgrowth, rgdpgrowth_nea, rgdpgrowth_pfmh, rgdpgrowth_afrreo, rgdpgrowth_wdi))
+
 # Manual corrections
 rgdp_comb <- rgdp_comb |> 
-  # Replace implausible observation for Bangladesh in 2016 by the more plausible value from PFMH
-  mutate(rgdpgrowth = if_else(iso3c %in% "BGD" & year == 2016, rgdpgrowth_pfmh, rgdpgrowth)) |> 
-  # Set implausible observations to NA
-  mutate(rgdpgrowth = if_else(iso3c %in% "EGY" & year == 2020, NA_real_, rgdpgrowth)) |> 
-  mutate(rgdpgrowth = if_else(iso3c %in% "BLR" & (year == 2018 | year == 2022), NA_real_, rgdpgrowth)) 
+  # Replace implausible observation for Belarus in 2018 and 2022 by the more plausible values from WDI
+  mutate(rgdpgrowth = if_else(iso3c %in% "BLR" & (year == 2018 | year == 2022), rgdpgrowth_wdi, rgdpgrowth))
 
 ## 2.6 Inflation Data =================================================
 
@@ -124,6 +129,9 @@ infl_comb <- clean_data$bis_cpi_clean |>
 # Choose the longest series per country
 
 infl_comb <- combine_longest_series(infl_comb, "inflation", c("inflation_bis", "inflation_weo", "inflation_wdi"))
+
+# Fill missing values with values from the other sources
+infl_comb <- infl_comb |> mutate(inflation = coalesce(inflation, inflation_bis, inflation_weo, inflation_wdi))
 
 ## 2.5 Debt Variables ===============================================
 
@@ -150,6 +158,9 @@ cgdppriv_comb <- combine_longest_series(
   indicator = "cgdppriv",
   sources = c("cgdppriv_bis", "cgdppriv_gdd", "cgdppriv_afrreo", "cgdppriv_wdi")
 )
+
+# # Fill missing values with values from the other sources
+cgdppriv_comb <- cgdppriv_comb |> mutate(cgdppriv = coalesce(cgdppriv, cgdppriv_bis, cgdppriv_gdd, cgdppriv_afrreo, cgdppriv_wdi))
 
 # Corporate and household credit-to-GDP ratio
 cgdpprivsplit <- clean_data$gdd_clean |> select(year, iso3c, cgdpcorp, cgdph)
@@ -243,6 +254,10 @@ blpriv_comb <- combine_longest_series(
   sources = c("blpriv_bis", "blpriv_approx")
 )
 
+# Fill missing values with values from the other sources
+bcgdppriv_comb <- bcgdppriv_comb |> mutate(bcgdppriv = coalesce(bcgdppriv, bcgdppriv_constr, bcgdppriv_wdi))
+blpriv_comb <- blpriv_comb |> mutate(blpriv = coalesce(blpriv, blpriv_bis, blpriv_approx))
+
 # Calculate bank credit growth
 blpriv_comb <- blpriv_comb |> 
   arrange(iso3c, year) |> 
@@ -281,6 +296,9 @@ govcgdp_comb <- combine_longest_series(
   sources = c("govcgdp_weo", "govcgdp_pfmh", "govcgdp_gdd", "ggovdebt_gdd")
 )
 
+# Fill missing values with values from the other sources
+govcgdp_comb <- govcgdp_comb |> mutate(govcgdp = coalesce(govcgdp, govcgdp_weo, govcgdp_pfmh, govcgdp_gdd, ggovdebt_gdd))
+
 ## 2.7 Current account balance (% of GDP) =============================
 
 bca_wdi <- clean_data$wdi2_clean |> select(year, iso3c, bcagdp_wdi) 
@@ -299,6 +317,9 @@ bca_comb <- combine_longest_series(
   sources = c("bcagdp_weo", "bcagdp_wdi")
 )
 
+# Fill missing values with values from the other sources
+bca_comb <- bca_comb |> mutate(bcagdp = coalesce(bcagdp, bcagdp_weo, bcagdp_wdi))
+
 ## 2.8 Property Prices =======================================
 
 # Combine datasets
@@ -311,6 +332,9 @@ pp_comb <- combine_longest_series(
   indicator = "ppgrowth",
   sources = c("ppgrowth_bis", "ppgrowth_oecd")
 )
+
+# Fill missing values with values from the other sources
+pp_comb <- pp_comb |> mutate(ppgrowth = coalesce(ppgrowth, ppgrowth_bis, ppgrowth_oecd))
 
 ## 2.9 Net foreign assets ===================================================
 
@@ -330,6 +354,9 @@ nfa_comb <- combine_longest_series(
   indicator = "nfa",
   sources = c("nfa_mfs", "nfa_wdi")
 )
+
+# Fill missing values with values from the other sources
+nfa_comb <- nfa_comb |> mutate(nfa = coalesce(nfa, nfa_mfs, nfa_wdi))
 
 # Compute NFA-to-GDP ratio
 nfa_comb <- nfa_comb |> 
@@ -389,14 +416,18 @@ bmgdp_comb <- combine_longest_series(
   sources = c("bmgdp_wdi", "bmgdp_gfd")
 )
 
+# Fill missing values with values from the other sources
+bmgdp_comb <- bmgdp_comb |> mutate(bmgdp = coalesce(bmgdp, bmgdp_wdi, bmgdp_gfd))
+
+
 # Manually correct breaks and errors
 bmgdp_comb <- bmgdp_comb |> 
   # Replace the WDI bmgdp series by the GFD series for Sierra Leone
   mutate(bmgdp = if_else(iso3c %in% "SLE", bmgdp_gfd, bmgdp)) |> 
   # Set implausible bmgdp value for Luxembourg in 1993 to NA
   mutate(bmgdp = if_else(iso3c %in% "LUX" & year == 1993, NA_real_, bmgdp)) |> 
-  # Set implausible bmgdp values for Spain from 1997 to 2000 to NA
-  mutate(bmgdp = if_else(iso3c %in% "ESP" & year >= 1997 & year <= 2000, NA_real_, bmgdp))
+  # Multiply implausibly low bmgdp values for Spain from 1997 to 2000 by 10
+  mutate(bmgdp = if_else(iso3c %in% "ESP" & year >= 1997 & year <= 2000, bmgdp * 10, bmgdp))
 
 # Broad Money
 
@@ -420,12 +451,15 @@ bm_comb <- combine_longest_series(
   sources = c("bm_mfs", "bm_wdi", "bm_approx")
 )
 
+# Fill missing values with values from the other sources
+bm_comb <- bm_comb |> mutate(bm = coalesce(bm, bm_mfs, bm_wdi, bm_approx))
+
 # Manual corrections
 bm_comb <- bm_comb |> 
-  mutate(
-    # Replace implausible bmoney values for Sierra Leone by the approximation
-    bm = if_else(iso3c %in% "SLE", bm_approx, bm)
-    ) 
+  # Replace implausible bmoney values for Sierra Leone by the approximation
+  mutate(bm = if_else(iso3c %in% "SLE", bm_approx, bm)) |> 
+  # Set broad money value for Liberia in 2024 as missing since it creates an artificial jump
+  mutate(bm = if_else(iso3c %in% "LBR" & year == 2024, NA_real_, bm))
 
 # Broad Money to Total Reserves
 
@@ -452,11 +486,14 @@ bmtr_comb <- combine_longest_series(
   sources = c("bmtr_wdi", "bmtr_constr")
 )
 
+# Fill missing values with values from the other sources
+bmtr_comb <- bmtr_comb |> mutate(bmtr = coalesce(bmtr, bmtr_wdi, bmtr_constr))
+
 # Manual Corrections
 bmtr_comb <- bmtr_comb |> 
   mutate(
-    # Set implausible bmtr values for Sierra Leone to NA
-    bmtr = if_else(iso3c %in% "SLE" & year >= 2001 & year <= 2014, NA_real_, bmtr) 
+    # Divide implausibly high bmtr values for Sierra Leone by 1000 (then they become more plausible)
+    bmtr = if_else(iso3c %in% "SLE" & year >= 2001 & year <= 2014, bmtr / 1000, bmtr) 
   )
 
 # Calculate broad money growth rate
@@ -495,6 +532,9 @@ ltd_comb <- combine_longest_series(
   sources = c("ltd_mfs", "ltd_gfd", "ltd_jst")
 )
 
+# Fill missing values with values from the other sources
+ltd_comb <- ltd_comb |> mutate(ltd = coalesce(ltd, ltd_mfs, ltd_gfd, ltd_jst))
+
 ## 2.13 Share prices =========================================================
 
 # GFD
@@ -528,6 +568,9 @@ sp_comb <- combine_longest_series(
   indicator = "spr",
   sources = c("spr_oecd", "spr_mfs", "spr_gfd")
 )
+
+# Fill missing values with values from the other sources
+sp_comb <- sp_comb |> mutate(spr = coalesce(spr, spr_oecd, spr_mfs, spr_gfd))
 
 # Compute real stock market return
 
