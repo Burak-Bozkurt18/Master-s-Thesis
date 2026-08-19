@@ -536,6 +536,7 @@ wdi2_clean <- wdi2 |>
     "nfa" = net_foreign_assets_current_lcu,
     "bcagdp_wdi" = current_account_balance_percent_of_gdp,
     "ngdp" = gdp_current_lcu,
+    "rgdpgrowth" = gdp_growth_annual_percent,
     "cgdppriv" = domestic_credit_to_private_sector_percent_of_gdp,
     "bcgdppriv" = domestic_credit_to_private_sector_by_banks_percent_of_gdp,
     "trd" = total_reserves_includes_gold_current_us,
