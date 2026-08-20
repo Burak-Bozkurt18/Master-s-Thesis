@@ -98,17 +98,11 @@ panel <- left_join(panel, indicators$infl_comb |> select(iso3c, year, inflation)
 # Total Private Credit-to-GDP ratio
 panel <- left_join(panel, indicators$cgdppriv_comb |> select(iso3c, year, cgdppriv), by = c("iso3c", "year"))
 
-# Bank Private Credit-to-GDP ratio
-panel <- left_join(panel, indicators$bcgdppriv_comb |> select(iso3c, year, bcgdppriv), by = c("iso3c", "year"))
-
 # Corporate and household Credit-to-GDP ratio
 panel <- left_join(panel, indicators$cgdpprivsplit, by = c("iso3c", "year"))
 
 # Real Total credit growth
 panel <- left_join(panel, indicators$credit_comb |>  select(year, iso3c, ends_with("rgrowth")), by = c("iso3c", "year"))
-
-# Real Bank credit growth
-panel <- left_join(panel, indicators$blpriv_comb |> select(year, iso3c, blpriv_rgrowth), by = c("iso3c", "year"))
 
 # Government Credit-to-GDP ratio
 panel <- left_join(panel, indicators$govcgdp_comb |> select(iso3c, year, govcgdp), by = c("iso3c", "year"))

@@ -33,10 +33,81 @@ par(family = "serif")
 
 # 4 Preprocessing ============================================================
 
+x_vars <- colnames(panel)[10:27]
+
+# Coverage per row in %
+panel_mod <- panel |>
+  mutate(
+    n_available = rowSums(!is.na(across(all_of(x_vars)))),
+    coverage = n_available / length(x_vars)
+  )
+
+# Drop rows with variable coverage less than 50%
+panel_restricted <- panel_mod |>
+  filter(coverage >= 0.50)
+
 # Remove crisis years
-panel_logit <- panel |> 
+panel_logit <- panel_restricted |> 
   filter(crisis != 1) |> 
-  mutate(advanced = factor(advanced))
+  mutate(advanced = factor(advanced)) |> 
+  select(-c(n_available, coverage))
+
+# Check data coverage per variable
+
+coverage <- panel_logit |>
+  group_by(advanced) |> 
+  summarise(
+    across(
+      all_of(x_vars),
+      ~ mean(!is.na(.)) * 100
+    )
+  ) |>
+  pivot_longer(
+    cols = !advanced,
+    names_to = "variable",
+    values_to = "coverage_pct"
+  ) |>
+  pivot_wider(
+    names_from = advanced,
+    values_from = coverage_pct
+  ) |> 
+  arrange(desc(`0`))
+
+coverage
+
+# Broad Panel
+
+x_vars_broad <- c("inflation", "bmgdp", "bm_rgrowth",
+                  "rgdpgrowth", "cgdppriv", "govcgdp", "tlpriv_rgrowth", "bcagdp",
+                  "ltd")
+
+panel_logit_broad <- panel_logit |> 
+  select(-c(nfagdp, bmtr, sprr, tlcorp_rgrowth, tlh_rgrowth, cgdpcorp, cgdph, ycurve, ppgrowth))
+
+panel_logit_broad |>
+  group_by(iso3c) |>
+  mutate(across(all_of(x_vars_broad), ~ replace(.x, is.na(.x), median(.x, na.rm = TRUE))))
+
+# Expanding training window
+train <- panel_logit_broad |>
+  filter(year < 2005) |> 
+  group_by(iso3c) |>
+  mutate(across(all_of(x_vars_broad), ~ replace(.x, is.na(.x), median(.x, na.rm = TRUE)))) |> 
+  drop_na()
+
+# One-year test set
+test <- panel_logit_broad |>
+  filter(year == 2005)
+
+# Estimate model
+test_model <- glm(
+  formula = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + 
+    inflation + ltd + govcgdp + bcagdp + bm_rgrowth + 
+    bmgdp,
+  data = train,
+  family = binomial()
+)
+
 
 
 # 5 Estimate Logit Models =====================================================
@@ -46,33 +117,6 @@ panel_logit <- panel |>
 
 # Correlation between predictors
 panel |> select(advanced:sprr) |> cor(use = "pairwise.complete.obs")
-
-
-models <- list()
-
-formulas <- list(
-  Model1 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth,
-  
-  Model2 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth +
-    sprr + tlpriv_rgrowth:sprr,
-  
-  Model3 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth +
-    ppgrowth + tlpriv_rgrowth:ppgrowth,
-  
-  Model4 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth +
-    inflation + rgdpgrowth + govcgdp + bcagdp + ycurve +
-    sprr + ppgrowth
-)
-
-models <- lapply(
-  formulas,
-  \(f) glm(
-    formula = f,
-    data = panel_logit,
-    family = binomial()
-  )
-)
-
 
 
 # Custom model summary
@@ -132,13 +176,8 @@ models_broad <- list()
 
 formulas_broad <- list(
   Model1 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth,
-  Model2 = precrisis3 ~ advanced + bcgdppriv + blpriv_rgrowth,
-  Model3 = precrisis3 ~ advanced + cgdpcorp + cgdph + tlcorp_rgrowth + tlh_rgrowth,
-  Model4 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + nfagdp + bm_rgrowth + bmgdp + bmtr,
-  Model5 = precrisis3 ~ advanced + bcgdppriv + blpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + nfagdp + bm_rgrowth + bmgdp + bmtr,
-  Model6 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + nfagdp + bm_rgrowth + bmgdp + bmtr + ycurve + ppgrowth + sprr,
-  Model7 = precrisis3 ~ advanced + bcgdppriv + blpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + nfagdp + bm_rgrowth + bmgdp + bmtr + ycurve + ppgrowth + sprr,
-  Model8 = precrisis3 ~ advanced + cgdpcorp + cgdph + tlcorp_rgrowth + tlh_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + nfagdp + bm_rgrowth + bmgdp + bmtr + ycurve + ppgrowth + sprr
+  Model3 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + bm_rgrowth + bmgdp + bmtr,
+  Model5 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + nfagdp + bm_rgrowth + bmgdp + bmtr
 )
 
 
@@ -162,22 +201,20 @@ modelsummary(
   vcov = ~iso3c
 )
 
+best_broad_formula <- models_broad$Model5$formula
 
-# Interaction effects
-models_int <- list()
+# Narrow Models 
 
-formulas_int <- list(
-  Model1 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + sprr + tlpriv_rgrowth * sprr,
-  Model2 = precrisis3 ~ advanced + bcgdppriv + blpriv_rgrowth + sprr + blpriv_rgrowth * sprr,
-  Model3 = precrisis3 ~ advanced + cgdpcorp + cgdph + tlcorp_rgrowth + tlh_rgrowth + sprr + tlcorp_rgrowth * sprr + tlh_rgrowth * sprr,
-  Model4 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + ppgrowth + tlpriv_rgrowth * ppgrowth,
-  Model5 = precrisis3 ~ advanced + bcgdppriv + blpriv_rgrowth + ppgrowth + blpriv_rgrowth * ppgrowth,
-  Model6 = precrisis3 ~ advanced + cgdpcorp + cgdph + tlcorp_rgrowth + tlh_rgrowth + ppgrowth + tlcorp_rgrowth * ppgrowth + tlh_rgrowth * ppgrowth
+models_narrow <- list()
+
+formulas_narrow <- list(
+  Model1 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + bm_rgrowth + bmgdp + bmtr + ycurve + sprr + ppgrowth,
+  Model3 = precrisis3 ~ advanced + cgdpcorp + cgdph + tlcorp_rgrowth + tlh_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + bm_rgrowth + bmgdp + bmtr + ycurve + sprr + ppgrowth
 )
 
 
-models_int <- lapply(
-  formulas_int,
+models_narrow <- lapply(
+  formulas_narrow,
   \(f) glm(
     formula = f,
     data = panel_logit,
@@ -187,7 +224,7 @@ models_int <- lapply(
 
 
 modelsummary(
-  models_int,
+  models_narrow,
   title = "Title",
   gof_function = gof_custom,
   gof_omit = "RMSE|Log.Lik.|Std.Errors|AUC",
@@ -196,48 +233,17 @@ modelsummary(
   vcov = ~iso3c
 )
 
+best_narrow_formula <- models_narrow$Model3$formula
 
 ## 5.2 Out-of-sample ==========================================================
 
-train <- panel_logit |>
-  filter(year <= 2004)
-
-test <- panel_logit |>
-  filter(year > 2004 & year <= 2022)
-
-model <- glm(
-  precrisis3 ~ advanced + cgdpcorp + cgdph + tlcorp_rgrowth + tlh_rgrowth + rgdpgrowth + 
-    inflation + ltd + govcgdp + bcagdp + nfagdp + bm_rgrowth + bmgdp + bmtr +
-    ycurve + sprr + ppgrowth,
-  data = train,
-  family = binomial()
-)
-
-test <- test |>
-  mutate(pred_prob = predict(model, newdata = test, type = "response"))
-
-auc_oos <- auc(test$precrisis3, test$pred_prob)
-
-auc_oos
-
-test |> 
-  mutate(precrisis3 = factor(precrisis3)) |> 
-  roc_curve(
-    truth = precrisis3,
-    pred_prob,
-    event_level = "second"
-    ) |>
-  autoplot()
-
-
 ## Expanding window =========================================================
 
-logit_formula <- precrisis3 ~
-  advanced + cgdpcorp + cgdph + tlcorp_rgrowth + tlh_rgrowth + rgdpgrowth +
-  inflation + ltd + govcgdp + bcagdp + nfagdp + bm_rgrowth + bmgdp + bmtr +
-  ycurve + sprr + ppgrowth
+### 5.2.1 Broad Model ========================================================
 
-forecast_years <- 2005:2022
+# Without imputation
+
+forecast_years <- 2004:2022
 
 oos_predictions <- lapply(forecast_years, function(test_year) {
   
@@ -251,7 +257,7 @@ oos_predictions <- lapply(forecast_years, function(test_year) {
   
   # Estimate model
   model <- glm(
-    formula = logit_formula,
+    formula = best_broad_formula,
     data = train,
     family = binomial()
   )
@@ -283,6 +289,55 @@ oos_predictions |>
     event_level = "second"
   ) |>
   autoplot()
+
+
+### 5.2.2 Narrow Model =====================================================
+
+oos_predictions <- lapply(forecast_years, function(test_year) {
+  
+  # Expanding training window
+  train <- panel_logit |>
+    filter(year < test_year)
+  
+  # One-year test set
+  test <- panel_logit |>
+    filter(year == test_year)
+  
+  # Estimate model
+  model <- glm(
+    formula = best_narrow_formula,
+    data = train,
+    family = binomial()
+  )
+  
+  # Predict test year
+  test |>
+    mutate(pred_prob = predict(model, newdata = test, type = "response"))
+  
+}) |>
+  bind_rows()
+
+oos_predictions |>
+  select(iso3c, year, precrisis3, pred_prob) 
+
+auc_oos <- pROC::auc(
+  oos_predictions$precrisis3,
+  oos_predictions$pred_prob
+)
+
+auc_oos
+
+oos_predictions |>
+  mutate(
+    precrisis3 = factor(precrisis3, levels = c(0, 1))
+  ) |>
+  roc_curve(
+    truth = precrisis3,
+    pred_prob,
+    event_level = "second"
+  ) |>
+  autoplot()
+
 
 # Mülleimer =================================
 
@@ -588,3 +643,47 @@ oos_predictions |>
 #   stars = TRUE,
 #   vcov = ~iso3c
 # )
+
+
+
+
+
+
+# # Interaction effects
+# models_int <- list()
+# 
+# formulas_int <- list(
+#   Model1 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + sprr + ppgrowth + 
+#     tlpriv_rgrowth * sprr + tlpriv_rgrowth * ppgrowth,
+#   Model2 = precrisis3 ~ advanced + bcgdppriv + blpriv_rgrowth + sprr + ppgrowth +
+#     blpriv_rgrowth * sprr + blpriv_rgrowth * ppgrowth,
+#   Model3 = precrisis3 ~ advanced + cgdpcorp + cgdph + tlcorp_rgrowth + tlh_rgrowth + 
+#     ppgrowth + sprr + tlcorp_rgrowth * ppgrowth + tlh_rgrowth * ppgrowth +
+#     tlcorp_rgrowth * sprr + tlh_rgrowth * sprr,
+#   Model4 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + sprr + ppgrowth + 
+#     rgdpgrowth + inflation + ltd + govcgdp + bcagdp + bm_rgrowth + bmgdp + bmtr +
+#     tlpriv_rgrowth * sprr + tlpriv_rgrowth * ppgrowth
+# )
+# 
+# 
+# models_int <- lapply(
+#   formulas_int,
+#   \(f) glm(
+#     formula = f,
+#     data = panel_logit,
+#     family = binomial()
+#   )
+# )
+# 
+# 
+# modelsummary(
+#   models_int,
+#   title = "Title",
+#   gof_function = gof_custom,
+#   gof_omit = "RMSE|Log.Lik.|Std.Errors|AUC",
+#   coef_omit = "(Intercept)",
+#   stars = TRUE,
+#   vcov = ~iso3c
+# )
+
+

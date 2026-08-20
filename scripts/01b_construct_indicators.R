@@ -169,55 +169,6 @@ cgdpprivsplit <- clean_data$gdd_clean |> select(year, iso3c, cgdpcorp, cgdph)
 cgdpprivsplit <- cgdpprivsplit |> 
   mutate(cgdph = if_else(iso3c %in% "IND" & year >= 1998 & year <= 2006, NA_real_, cgdph))
 
-# Create approximated credit column
-credit_approx <- cgdppriv_comb |> 
-  select(iso3c, year, cgdppriv) |> 
-  left_join(clean_data$gdd_clean |> select(iso3c, year, cgdpcorp, cgdph), by = c("iso3c", "year")) |> 
-  left_join(ngdpbil, by = c("iso3c", "year")) |> 
-  mutate(
-    tlpriv_approx = cgdppriv / 100 * ngdpbil,
-    tlcorp_approx = cgdpcorp / 100 * ngdpbil,
-    tlh_approx = cgdph / 100 * ngdpbil,
-    year,
-    iso3c,
-    .keep = "none"
-  ) 
-
-# Combine actual credit dataset with approximated values
-credit_comb <- clean_data$credit_bis_clean |> 
-  # exclude bank loans, they are relevant later
-  select(-bloanspriv) |> 
-  full_join(credit_approx, by = c("iso3c", "year"))
-
-# Fill in missing values in tloanspriv with the approximated values
-credit_comb <- credit_comb |> 
-  mutate(
-    tlpriv = coalesce(tloanspriv, tlpriv_approx),
-    tlcorp = coalesce(tloanscorp, tlcorp_approx),
-    tlh = coalesce(tloansh, tlh_approx)
-  )
-
-# Calculate credit growth
-credit_comb <- credit_comb |> 
-  arrange(iso3c, year) |> 
-  group_by(iso3c) |> 
-  mutate(
-    tlpriv_growth = (log(tlpriv) - lag(log(tlpriv))) * 100,
-    tlcorp_growth = (log(tlcorp) - lag(log(tlcorp))) * 100,
-    tlh_growth = (log(tlh) - lag(log(tlh))) * 100
-  )
-
-# Calculate real credit growth
-credit_comb <- credit_comb |> 
-  left_join(infl_comb |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
-  arrange(iso3c, year) |> 
-  group_by(iso3c) |> 
-  mutate(
-    tlpriv_rgrowth = ((1 + tlpriv_growth/100) / (1 + inflation/100) - 1) * 100,
-    tlcorp_rgrowth = ((1 + tlcorp_growth/100) / (1 + inflation/100) - 1) * 100,
-    tlh_rgrowth = ((1 + tlh_growth/100) / (1 + inflation/100) - 1) * 100
-  ) |> 
-  ungroup()
 
 # Bank Credit
 
@@ -258,21 +209,96 @@ blpriv_comb <- combine_longest_series(
 bcgdppriv_comb <- bcgdppriv_comb |> mutate(bcgdppriv = coalesce(bcgdppriv, bcgdppriv_constr, bcgdppriv_wdi))
 blpriv_comb <- blpriv_comb |> mutate(blpriv = coalesce(blpriv, blpriv_bis, blpriv_approx))
 
-# Calculate bank credit growth
-blpriv_comb <- blpriv_comb |> 
+
+
+# Combine total credit-to-GDP and bank credit-to-GDP
+cgdppriv_comb <- cgdppriv_comb |> 
+  select(iso3c, year, cgdppriv) |> 
+  left_join(bcgdppriv_comb |> select(iso3c, year, bcgdppriv), by = c("iso3c", "year"))
+  
+# In order to use bank credit as an estimation of total credit, estimate ratio "a"
+cgdp_ratios <- cgdppriv_comb |> 
+  filter(year >= 1970 & year <= 2025) |> 
+  group_by(iso3c) |> 
+  summarize(a = median(cgdppriv / bcgdppriv, na.rm = T))
+
+# Add ratio "a" to cgdp panel
+cgdppriv_comb <- cgdppriv_comb |> 
+  left_join(cgdp_ratios, by = c("iso3c"))
+
+# Fill missing observations in total credit-to-GDP by bank credit-to-GDP (multiplied by ratio "a")
+cgdppriv_comb <- cgdppriv_comb |> 
+  mutate(cgdppriv = coalesce(cgdppriv, bcgdppriv * a))
+
+
+# Create approximated credit column
+credit_approx <- cgdppriv_comb |> 
+  select(iso3c, year, cgdppriv) |> 
+  left_join(clean_data$gdd_clean |> select(iso3c, year, cgdpcorp, cgdph), by = c("iso3c", "year")) |> 
+  left_join(ngdpbil, by = c("iso3c", "year")) |> 
+  mutate(
+    tlpriv_approx = cgdppriv / 100 * ngdpbil,
+    tlcorp_approx = cgdpcorp / 100 * ngdpbil,
+    tlh_approx = cgdph / 100 * ngdpbil,
+    year,
+    iso3c,
+    .keep = "none"
+  ) 
+
+# Combine actual credit dataset with approximated values
+credit_comb <- clean_data$credit_bis_clean |> 
+  # exclude BIS bank loans column
+  select(-bloanspriv) |> 
+  full_join(credit_approx, by = c("iso3c", "year"))
+
+# Fill in missing values in tloanspriv with the approximated values
+credit_comb <- credit_comb |> 
+  mutate(
+    tlpriv = coalesce(tloanspriv, tlpriv_approx),
+    tlcorp = coalesce(tloanscorp, tlcorp_approx),
+    tlh = coalesce(tloansh, tlh_approx)
+  )
+
+
+# Combine total credit with bank credit
+
+credit_comb <- credit_comb |> 
+  select(iso3c, year, tlpriv, tlcorp, tlh) |> 
+  left_join(blpriv_comb |> select(iso3c, year, blpriv), by = c("iso3c", "year"))
+  
+# In order to use bank credit as an estimation of total credit, estimate ratio "a"
+credit_ratios <- credit_comb |> 
+  filter(year >= 1970 & year <= 2025) |> 
+  group_by(iso3c) |> 
+  summarize(a = median(tlpriv / blpriv, na.rm = T))
+
+# Add ratio "a" to credit panel
+credit_comb <- credit_comb |> 
+  left_join(credit_ratios, by = c("iso3c"))
+
+# Fill missing observations in total credit by bank credit (multiplied by ratio "a")
+credit_comb <- credit_comb |> 
+  mutate(tlpriv = coalesce(tlpriv, blpriv * a))
+
+# Calculate credit growth
+credit_comb <- credit_comb |> 
   arrange(iso3c, year) |> 
   group_by(iso3c) |> 
   mutate(
-    blpriv_growth = (log(blpriv) - lag(log(blpriv))) * 100
+    tlpriv_growth = (log(tlpriv) - lag(log(tlpriv))) * 100,
+    tlcorp_growth = (log(tlcorp) - lag(log(tlcorp))) * 100,
+    tlh_growth = (log(tlh) - lag(log(tlh))) * 100
   )
 
-# Calculate real bank credit growth
-blpriv_comb <- blpriv_comb |> 
+# Calculate real credit growth
+credit_comb <- credit_comb |> 
   left_join(infl_comb |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
   arrange(iso3c, year) |> 
   group_by(iso3c) |> 
   mutate(
-    blpriv_rgrowth = ((1 + blpriv_growth/100) / (1 + inflation/100) - 1) * 100
+    tlpriv_rgrowth = ((1 + tlpriv_growth/100) / (1 + inflation/100) - 1) * 100,
+    tlcorp_rgrowth = ((1 + tlcorp_growth/100) / (1 + inflation/100) - 1) * 100,
+    tlh_rgrowth = ((1 + tlh_growth/100) / (1 + inflation/100) - 1) * 100
   ) |> 
   ungroup()
 
