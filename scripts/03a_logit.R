@@ -75,40 +75,6 @@ coverage <- panel_logit |>
 
 coverage
 
-# Broad Panel
-
-x_vars_broad <- c("inflation", "bmgdp", "bm_rgrowth",
-                  "rgdpgrowth", "cgdppriv", "govcgdp", "tlpriv_rgrowth", "bcagdp",
-                  "ltd")
-
-panel_logit_broad <- panel_logit |> 
-  select(-c(nfagdp, bmtr, sprr, tlcorp_rgrowth, tlh_rgrowth, cgdpcorp, cgdph, ycurve, ppgrowth))
-
-panel_logit_broad |>
-  group_by(iso3c) |>
-  mutate(across(all_of(x_vars_broad), ~ replace(.x, is.na(.x), median(.x, na.rm = TRUE))))
-
-# Expanding training window
-train <- panel_logit_broad |>
-  filter(year < 2005) |> 
-  group_by(iso3c) |>
-  mutate(across(all_of(x_vars_broad), ~ replace(.x, is.na(.x), median(.x, na.rm = TRUE)))) |> 
-  drop_na()
-
-# One-year test set
-test <- panel_logit_broad |>
-  filter(year == 2005)
-
-# Estimate model
-test_model <- glm(
-  formula = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + 
-    inflation + ltd + govcgdp + bcagdp + bm_rgrowth + 
-    bmgdp,
-  data = train,
-  family = binomial()
-)
-
-
 
 # 5 Estimate Logit Models =====================================================
 
@@ -176,8 +142,13 @@ models_broad <- list()
 
 formulas_broad <- list(
   Model1 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth,
+  Model2 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp,
   Model3 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + bm_rgrowth + bmgdp + bmtr,
-  Model5 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + nfagdp + bm_rgrowth + bmgdp + bmtr
+  Model4 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + nfagdp + bm_rgrowth + bmgdp + bmtr,
+  Model5 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + bm_rgrowth + bmgdp + bmtr + sprr,
+  Model6 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + nfagdp + bm_rgrowth + bmgdp + bmtr + sprr,
+  Model7 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + bm_rgrowth + bmgdp + bmtr + ycurve + sprr + ppgrowth,
+  Model8 = precrisis3 ~ advanced + cgdpcorp + cgdph + tlcorp_rgrowth + tlh_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + bm_rgrowth + bmgdp + bmtr + ycurve + sprr + ppgrowth
 )
 
 
@@ -202,38 +173,15 @@ modelsummary(
 )
 
 best_broad_formula <- models_broad$Model5$formula
-
-# Narrow Models 
-
-models_narrow <- list()
-
-formulas_narrow <- list(
-  Model1 = precrisis3 ~ advanced + cgdppriv + tlpriv_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + bm_rgrowth + bmgdp + bmtr + ycurve + sprr + ppgrowth,
-  Model3 = precrisis3 ~ advanced + cgdpcorp + cgdph + tlcorp_rgrowth + tlh_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + bm_rgrowth + bmgdp + bmtr + ycurve + sprr + ppgrowth
-)
+best_narrow_formula <- models_broad$Model5$formula
 
 
-models_narrow <- lapply(
-  formulas_narrow,
-  \(f) glm(
-    formula = f,
-    data = panel_logit,
-    family = binomial()
-  )
-)
+
+panel_logit |> select(-nfagdp) |> mutate(precrisis3 = factor(precrisis3)) |>  drop_na() |> group_by(year, precrisis3) |> summarize(n = n()) |> ggplot(aes(x = year, y = n, fill = precrisis3)) + geom_col()
+panel_logit |> select(-c(nfagdp, ppgrowth, ycurve)) |> mutate(precrisis3 = factor(precrisis3)) |>  drop_na() |> group_by(year, precrisis3) |> summarize(n = n()) |> ggplot(aes(x = year, y = n, fill = precrisis3)) + geom_col()
+panel_logit |> select(-c(nfagdp, ycurve, ppgrowth, tlcorp_rgrowth, tlh_rgrowth, cgdpcorp, cgdph)) |> mutate(precrisis3 = factor(precrisis3)) |>  drop_na() |> group_by(year, precrisis3) |> summarize(n = n()) |> ggplot(aes(x = year, y = n, fill = precrisis3)) + geom_col()
 
 
-modelsummary(
-  models_narrow,
-  title = "Title",
-  gof_function = gof_custom,
-  gof_omit = "RMSE|Log.Lik.|Std.Errors|AUC",
-  coef_omit = "(Intercept)",
-  stars = TRUE,
-  vcov = ~iso3c
-)
-
-best_narrow_formula <- models_narrow$Model3$formula
 
 ## 5.2 Out-of-sample ==========================================================
 
@@ -244,52 +192,6 @@ best_narrow_formula <- models_narrow$Model3$formula
 # Without imputation
 
 forecast_years <- 2004:2022
-
-oos_predictions <- lapply(forecast_years, function(test_year) {
-  
-  # Expanding training window
-  train <- panel_logit |>
-    filter(year < test_year)
-  
-  # One-year test set
-  test <- panel_logit |>
-    filter(year == test_year)
-  
-  # Estimate model
-  model <- glm(
-    formula = best_broad_formula,
-    data = train,
-    family = binomial()
-  )
-  
-  # Predict test year
-  test |>
-    mutate(pred_prob = predict(model, newdata = test, type = "response"))
-  
-}) |>
-  bind_rows()
-
-oos_predictions |>
-  select(iso3c, year, precrisis3, pred_prob) 
-
-auc_oos <- pROC::auc(
-  oos_predictions$precrisis3,
-  oos_predictions$pred_prob
-)
-
-auc_oos
-
-oos_predictions |>
-  mutate(
-    precrisis3 = factor(precrisis3, levels = c(0, 1))
-  ) |>
-  roc_curve(
-    truth = precrisis3,
-    pred_prob,
-    event_level = "second"
-  ) |>
-  autoplot()
-
 
 ### 5.2.2 Narrow Model =====================================================
 
