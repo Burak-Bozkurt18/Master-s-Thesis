@@ -11,7 +11,8 @@ library(modelsummary)
 library(pROC)
 library(foreach)
 library(doParallel)
-
+library(kernelshap)
+library(shapviz)
 
 # 2 Load Panel ===============================================================
 
@@ -32,478 +33,6 @@ theme_set(
 )
 
 par(family = "serif")
-
-
-# 4 Preprocessing ===========================================================
-
-panel_temp <- panel |> 
-  # Remove crisis years
-  filter(crisis != 1) |> 
-  # Convert precrisis variable into a factor
-  mutate(precrisis3 = factor(precrisis3, levels = c(0, 1)))
-
-# Baseline model panel
-panel_ml1 <- panel_temp |> 
-  # Select predictors and important columns
-  select(iso3c, year, precrisis3, advanced, cgdppriv, tlpriv_rgrowth, govcgdp) |> 
-  # Drop NAs
-  drop_na()
-
-# Broad model panel
-panel_ml2 <- panel_temp |> 
-  # Select predictors and important columns
-  select(iso3c, year, precrisis3, advanced, cgdppriv, tlpriv_rgrowth, govcgdp, inflation, rgdpgrowth, ltd, bcagdp) |> 
-  # Drop NAs
-  drop_na()
-
-# Full model panel
-panel_ml3 <- panel_temp |> 
-  # Select predictors and important columns
-  select(iso3c, year, precrisis3, advanced, cgdppriv, tlpriv_rgrowth, govcgdp, inflation, rgdpgrowth, ltd, bcagdp, bm_rgrowth, bmgdp, bmtr, sprr) |> 
-  # Drop NAs
-  drop_na()
-
-# 4 Estimate Machine Learning Models =========================================
-
-# Create training sets
-train1 <- panel_ml1 |>
-  filter(year <= 2004)
-
-train2 <- panel_ml2 |>
-  filter(year <= 2004)
-
-train3 <- panel_ml3 |>
-  filter(year <= 2004)
-
-# Create cross-validation folds
-cv_periods <- tibble(
-  id = paste0("Fold", 1:14),
-  analysis_start = 1970,
-  analysis_end = 1990:2003,
-  assessment_start = 1991:2004,
-  assessment_end = 1991:2004
-)
-
-make_split <- function(data, analysis_start, analysis_end, assessment_start, assessment_end) {
-  
-  make_splits(
-    x = list(
-      analysis = which(data$year >= analysis_start & data$year <= analysis_end),
-      assessment = which(data$year >= assessment_start & data$year <= assessment_end)
-    ),
-    data = data
-  )
-}
-
-folds1 <- manual_rset(
-  splits = pmap(
-    list(
-      cv_periods$analysis_start,
-      cv_periods$analysis_end,
-      cv_periods$assessment_start,
-      cv_periods$assessment_end
-    ),
-    ~ make_split(
-      train1,
-      ..1, ..2, ..3, ..4
-    )
-  ),
-  ids = cv_periods$id
-)
-
-folds2 <- manual_rset(
-  splits = pmap(
-    list(
-      cv_periods$analysis_start,
-      cv_periods$analysis_end,
-      cv_periods$assessment_start,
-      cv_periods$assessment_end
-    ),
-    ~ make_split(
-      train2,
-      ..1, ..2, ..3, ..4
-    )
-  ),
-  ids = cv_periods$id
-)
-
-folds3 <- manual_rset(
-  splits = pmap(
-    list(
-      cv_periods$analysis_start,
-      cv_periods$analysis_end,
-      cv_periods$assessment_start,
-      cv_periods$assessment_end
-    ),
-    ~ make_split(
-      train3,
-      ..1, ..2, ..3, ..4
-    )
-  ),
-  ids = cv_periods$id
-)
-
-forecast_years <- 2005:2022
-
-# 4.1 Random Forests =========================================================
-
-# Baseline Model
-
-rec_rf1 <- recipe(precrisis3 ~ ., data = panel_ml1) |>
-  step_rm(iso3c, year)
-
-mod_rf1 <- rand_forest(
-  trees = 500,
-  mtry = tune(),
-  min_n = tune()
-  ) |>
-  set_engine(
-    engine = "ranger",
-    importance = "permutation"
-  ) |>
-  set_mode("classification")
-
-wf_rf1 <- workflow() |>
-  add_recipe(rec_rf1) |>
-  add_model(mod_rf1)
-
-# Number of predictors
-n_predictors1 <- train1 |>
-  select(-precrisis3, -iso3c, -year) |>
-  ncol()
-
-# Create the grid
-set.seed(123)
-
-rf_grid1 <- grid_random(
-  mtry(range = c(2L, n_predictors1)),
-  min_n(range = c(2L, 30L)),
-  size = 30
-)
-
-
-# Parallel processing
-n_cores <- detectCores()
-n_cores
-
-cl <- makePSOCKcluster(n_cores - 1)
-registerDoParallel(cl)
-
-
-# Tune Hyperparameters
-rf_tuned1 <- tune_grid(
-  wf_rf1,
-  resamples = folds1,
-  grid = rf_grid1,
-  metrics = metric_set(roc_auc),
-  control = control_grid(save_pred = TRUE, verbose = TRUE)
-)
-
-stopCluster(cl)
-
-show_best(rf_tuned1, metric = "roc_auc")
-
-best_rf1 <- select_best(rf_tuned1, metric = "roc_auc")
-
-# Actual pseudo oos forecasting
-
-final_wf1 <- finalize_workflow(wf_rf1, best_rf1)
-
-rf_oos_results1 <- map_dfr(
-  forecast_years,
-  function(y) {
-    
-    train_data <- panel_ml1 |>
-      filter(.data$year >= 1970, .data$year <= .env$y - 1)
-    
-    test_data <- panel_ml1 |>
-      filter(.data$year == .env$y)
-    
-    fit <- final_wf1 |>
-      fit(data = train_data)
-    
-    predictions <- predict(
-      fit,
-      new_data = test_data,
-      type = "prob"
-    )
-    
-    test_data |>
-      select(iso3c, year, precrisis3) |>
-      bind_cols(predictions)
-  }
-)
-
-
-# Evaluate
-roc_auc(
-  rf_oos_results1,
-  truth = precrisis3,
-  .pred_1,
-  event_level = "second"
-)
-
-rf_oos_results1 |>
-  roc_curve(
-    truth = precrisis3,
-    .pred_1,
-    event_level = "second"
-  ) |>
-  autoplot()
-
-# Broad model
-
-
-rec_rf2 <- recipe(precrisis3 ~ ., data = panel_ml2) |>
-  step_rm(iso3c, year)
-
-mod_rf2 <- rand_forest(
-  trees = 500,
-  mtry = tune(),
-  min_n = tune()
-) |>
-  set_engine(
-    engine = "ranger",
-    importance = "permutation"
-  ) |>
-  set_mode("classification")
-
-wf_rf2 <- workflow() |>
-  add_recipe(rec_rf2) |>
-  add_model(mod_rf2)
-
-# Number of predictors
-n_predictors2 <- train2 |>
-  select(-precrisis3, -iso3c, -year) |>
-  ncol()
-
-# Create the grid
-set.seed(123)
-
-rf_grid2 <- grid_random(
-  mtry(range = c(2L, n_predictors2)),
-  min_n(range = c(2L, 30L)),
-  size = 30
-)
-
-
-# Parallel processing
-n_cores <- detectCores()
-n_cores
-
-cl <- makePSOCKcluster(n_cores - 1)
-registerDoParallel(cl)
-
-
-# Tune Hyperparameters
-rf_tuned2 <- tune_grid(
-  wf_rf2,
-  resamples = folds2,
-  grid = rf_grid2,
-  metrics = metric_set(roc_auc),
-  control = control_grid(save_pred = TRUE, verbose = TRUE)
-)
-
-stopCluster(cl)
-
-show_best(rf_tuned2, metric = "roc_auc")
-
-best_rf2 <- select_best(rf_tuned2, metric = "roc_auc")
-
-# Actual pseudo oos forecasting
-
-final_wf2 <- finalize_workflow(wf_rf2, best_rf2)
-
-rf_oos_results2 <- map_dfr(
-  forecast_years,
-  function(y) {
-    
-    train_data <- panel_ml2 |>
-      filter(.data$year >= 1970, .data$year <= .env$y - 1)
-    
-    test_data <- panel_ml2 |>
-      filter(.data$year == .env$y)
-    
-    fit <- final_wf2 |>
-      fit(data = train_data)
-    
-    predictions <- predict(
-      fit,
-      new_data = test_data,
-      type = "prob"
-    )
-    
-    test_data |>
-      select(iso3c, year, precrisis3) |>
-      bind_cols(predictions)
-  }
-)
-
-
-# Evaluate
-roc_auc(
-  rf_oos_results2,
-  truth = precrisis3,
-  .pred_1,
-  event_level = "second"
-)
-
-rf_oos_results2 |>
-  roc_curve(
-    truth = precrisis3,
-    .pred_1,
-    event_level = "second"
-  ) |>
-  autoplot()
-
-
-# Full model
-
-rec_rf3 <- recipe(precrisis3 ~ ., data = panel_ml3) |>
-  step_rm(iso3c, year)
-
-mod_rf3 <- rand_forest(
-  trees = 500,
-  mtry = tune(),
-  min_n = tune()
-) |>
-  set_engine(
-    engine = "ranger",
-    importance = "permutation"
-  ) |>
-  set_mode("classification")
-
-wf_rf3 <- workflow() |>
-  add_recipe(rec_rf3) |>
-  add_model(mod_rf3)
-
-# Number of predictors
-n_predictors3 <- train3 |>
-  select(-precrisis3, -iso3c, -year) |>
-  ncol()
-
-# Create the grid
-set.seed(123)
-
-rf_grid3 <- grid_random(
-  mtry(range = c(2L, n_predictors3)),
-  min_n(range = c(2L, 30L)),
-  size = 30
-)
-
-
-# Parallel processing
-n_cores <- detectCores()
-n_cores
-
-cl <- makePSOCKcluster(n_cores - 1)
-registerDoParallel(cl)
-
-
-# Tune Hyperparameters
-rf_tuned3 <- tune_grid(
-  wf_rf3,
-  resamples = folds3,
-  grid = rf_grid3,
-  metrics = metric_set(roc_auc),
-  control = control_grid(save_pred = TRUE, verbose = TRUE)
-)
-
-stopCluster(cl)
-
-show_best(rf_tuned3, metric = "roc_auc")
-
-best_rf3 <- select_best(rf_tuned3, metric = "roc_auc")
-
-# Actual pseudo oos forecasting
-
-final_wf3 <- finalize_workflow(wf_rf3, best_rf3)
-
-rf_oos_results3 <- map_dfr(
-  forecast_years,
-  function(y) {
-    
-    train_data <- panel_ml3 |>
-      filter(.data$year >= 1970, .data$year <= .env$y - 1)
-    
-    test_data <- panel_ml3 |>
-      filter(.data$year == .env$y)
-    
-    fit <- final_wf3 |>
-      fit(data = train_data)
-    
-    predictions <- predict(
-      fit,
-      new_data = test_data,
-      type = "prob"
-    )
-    
-    test_data |>
-      select(iso3c, year, precrisis3) |>
-      bind_cols(predictions)
-  }
-)
-
-
-# Evaluate
-roc_auc(
-  rf_oos_results3,
-  truth = precrisis3,
-  .pred_1,
-  event_level = "second"
-)
-
-rf_oos_results3 |>
-  roc_curve(
-    truth = precrisis3,
-    .pred_1,
-    event_level = "second"
-  ) |>
-  autoplot()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -555,11 +84,11 @@ train <- map(
 # 4. Cross-validation =========================================================
 
 cv_periods <- tibble(
-  id = paste0("Fold", 1:14),
+  id = paste0("Fold", 1:10),
   analysis_start = 1970,
-  analysis_end = 1990:2003,
-  assessment_start = 1991:2004,
-  assessment_end = 1991:2004
+  analysis_end = 1994:2003,
+  assessment_start = 1995:2004,
+  assessment_end = 1995:2004
   )
 
 
@@ -625,7 +154,7 @@ make_rf_workflow <- function(data) {
         ) |>
         set_mode("classification")
     )
-}
+  }
 
 
 # Hyperparameter grid
@@ -663,10 +192,10 @@ tune_rf <- function(data, folds, grid_size = 30) {
 # Tune all specifications
 set.seed(123)
 
-n_cores <- parallel::detectCores() - 1
+n_cores <- detectCores() - 1
 
-cl <- parallel::makePSOCKcluster(n_cores)
-doParallel::registerDoParallel(cl)
+cl <- makePSOCKcluster(n_cores)
+registerDoParallel(cl)
 
 rf_tuned <- map2(
   train,
@@ -674,7 +203,7 @@ rf_tuned <- map2(
   tune_rf
 )
 
-parallel::stopCluster(cl)
+stopCluster(cl)
 
 
 # Best hyperparameters
@@ -736,24 +265,840 @@ rf_oos_results <- map2(
 
 # 4.3 Evaluation =============================================================
 
-evaluate_rf <- function(results) {
+evaluate <- function(results) {
   
-  roc_auc(
+  roc <- roc_auc(
     results,
     truth = precrisis3,
     .pred_1,
     event_level = "second"
   )
+  
+  pr <- pr_auc(
+    results,
+    truth = precrisis3,
+    .pred_1,
+    event_level = "second"
+  )
+  
+  rbind(roc, pr)
 }
 
 
-rf_auc <- map_dfr(
-  rf_oos_results,
-  evaluate_rf,
-  .id = "specification"
+rf_auc <- map(rf_oos_results, evaluate) |> list_rbind(names_to = "specification")
+
+# 5. Support Vector Machines ==================================================
+
+# Generic SVM workflow
+make_svm_workflow <- function(data) {
+  
+  recipe(precrisis3 ~ ., data = data) |>
+    step_rm(iso3c, year) |>
+    step_normalize(all_predictors()) |>
+    workflow() |>
+    add_model(
+      svm_rbf(
+        cost = tune(),
+        rbf_sigma = tune()
+      ) |>
+        set_engine("kernlab") |>
+        set_mode("classification")
+    )
+}
+
+
+# Hyperparameter grid
+make_svm_grid <- function(size = 30) {
+  
+  grid_space_filling(
+    cost(),
+    rbf_sigma(),
+    size = size
+  )
+}
+
+
+# Tune one SVM specification
+tune_svm <- function(data, folds, grid_size = 30) {
+  
+  workflow <- make_svm_workflow(data)
+  
+  grid <- make_svm_grid(grid_size)
+  
+  tune_grid(
+    workflow,
+    resamples = folds,
+    grid = grid,
+    metrics = metric_set(roc_auc),
+    control = control_grid(
+      save_pred = TRUE,
+      verbose = TRUE
+    )
+  )
+}
+
+
+# Tune all specifications =====================================================
+
+set.seed(123)
+
+n_cores <- detectCores() - 1
+
+cl <- makePSOCKcluster(n_cores)
+
+registerDoParallel(cl)
+
+
+svm_tuned <- map2(
+  train,
+  folds,
+  tune_svm
 )
 
-rf_auc
+
+stopCluster(cl)
+
+
+# Best hyperparameters ========================================================
+
+best_svm <- map(
+  svm_tuned,
+  \(x) select_best(x, metric = "roc_auc")
+)
+
+
+best_svm
+
+
+# Pseudo-OOS forecasting ======================================================
+
+forecast_svm <- function(data, best_params, forecast_years) {
+  
+  final_workflow <- make_svm_workflow(data) |>
+    finalize_workflow(best_params)
+  
+  map_dfr(
+    forecast_years,
+    function(y) {
+      
+      train_data <- data |>
+        filter(year >= 1970, year <= y - 1)
+      
+      test_data <- data |>
+        filter(year == y)
+      
+      
+      fit <- final_workflow |>
+        fit(data = train_data)
+      
+      
+      predictions <- predict(
+        fit,
+        new_data = test_data,
+        type = "prob"
+      )
+      
+      
+      test_data |>
+        select(
+          iso3c,
+          year,
+          precrisis3
+        ) |>
+        bind_cols(predictions)
+    }
+  )
+}
+
+
+# Forecast all three specifications ===========================================
+
+svm_oos_results <- map2(
+  panels_ml,
+  best_svm,
+  \(data, params) {
+    forecast_svm(
+      data,
+      params,
+      forecast_years
+    )
+  }
+)
+
+# Evaluate SVMs ===============================================================
+
+svm_auc <- map(svm_oos_results, evaluate) |> list_rbind(names_to = "specification")
+
+# 6. Multilayer Perceptrons ===================================================
+
+make_mlp_workflow <- function(data) {
+  
+  recipe(precrisis3 ~ ., data = data) |>
+    step_rm(iso3c, year) |>
+    step_normalize(all_predictors()) |>
+    workflow() |>
+    add_model(
+      mlp(
+        hidden_units = tune(),
+        penalty = tune(),
+        epochs = 50,
+        activation = "relu"
+      ) |>
+        set_engine("brulee", stop_iter = 5) |>
+        set_mode("classification")
+    )
+}
+
+make_mlp_grid <- function(size = 10) {
+  
+  grid_space_filling(
+    hidden_units(range = c(1L, 5L)),
+    penalty(range = c(-5, 0)),
+    size = size
+  )
+}
+
+tune_mlp <- function(data, folds, grid_size = 10) {
+  
+  workflow <- make_mlp_workflow(data)
+  
+  grid <- make_mlp_grid(grid_size)
+  
+  tune_grid(
+    workflow,
+    resamples = folds,
+    grid = grid,
+    metrics = metric_set(roc_auc),
+    control = control_grid(save_pred = TRUE, verbose = TRUE)
+  )
+}
+
+# Tune all MLP specifications ================================================
+
+set.seed(123)
+
+n_cores <- detectCores() - 1
+
+cl <- makePSOCKcluster(n_cores)
+
+registerDoParallel(cl)
+
+
+mlp_tuned <- map2(
+  train,
+  folds,
+  tune_mlp
+)
+
+
+stopCluster(cl)
+
+
+
+best_mlp <- map(
+  mlp_tuned,
+  \(x) select_best(x, metric = "roc_auc")
+)
+
+best_mlp
+
+
+forecast_mlp <- function(data, best_params, forecast_years) {
+  
+  final_workflow <- make_mlp_workflow(data) |>
+    finalize_workflow(best_params)
+  
+  map_dfr(
+    forecast_years,
+    function(y) {
+      
+      train_data <- data |>
+        filter(year >= 1970, year <= y - 1)
+      
+      test_data <- data |>
+        filter(year == y)
+      
+      fit <- final_workflow |>
+        fit(data = train_data)
+      
+      predictions <- predict(
+        fit,
+        new_data = test_data,
+        type = "prob"
+      )
+      
+      test_data |>
+        select(
+          iso3c,
+          year,
+          precrisis3
+        ) |>
+        bind_cols(predictions)
+    }
+  )
+}
+
+mlp_oos_results <- map2(
+  panels_ml,
+  best_mlp,
+  \(data, params) {
+    forecast_mlp(
+      data,
+      params,
+      forecast_years
+    )
+  }
+)
+
+
+mlp_auc <- map(mlp_oos_results, evaluate) |> list_rbind(names_to = "specification")
+
+
+# Evaluate all ML results
+model_auc <- bind_rows(
+  
+  rf_auc |>
+    mutate(model = "Random Forest"),
+  
+  svm_auc |>
+    mutate(model = "SVM"),
+  
+  mlp_auc |>
+    mutate(model = "MLP")
+  
+  ) |>
+  select(
+    specification,
+    model,
+    .metric,
+    .estimate
+  )
+
+model_auc |> 
+  pivot_wider(
+    names_from = "specification",
+    values_from = ".estimate"
+  ) |> 
+  arrange(.metric)
+
+
+# ROC Curves =================================================================
+
+# RF
+map(
+  rf_oos_results, 
+  \(x) roc_curve(x, truth = precrisis3, .pred_1, event_level = "second") |> autoplot()
+)
+
+# SVM
+map(
+  svm_oos_results, 
+  \(x) roc_curve(x, truth = precrisis3, .pred_1, event_level = "second") |> autoplot()
+)
+
+
+# MLP
+map(
+  mlp_oos_results, 
+  \(x) roc_curve(x, truth = precrisis3, .pred_1, event_level = "second") |> autoplot()
+  )
+
+
+
+# Shapley Values =============================================================
+
+
+forecast_rf_shap <- function(data, best_params, forecast_years) {
+  
+  final_workflow <- make_rf_workflow(data) |>
+    finalize_workflow(best_params)
+  
+  map(
+    forecast_years,
+    function(y) {
+      
+      train_data <- data |>
+        filter(year >= 1970, year <= y - 1)
+      
+      test_data <- data |>
+        filter(year == y)
+      
+      # Fit model
+      fit <- final_workflow |>
+        fit(data = train_data)
+      
+      # IMPORTANT:
+      # Keep iso3c and year because the workflow expects them.
+      X_test <- test_data |>
+        select(-precrisis3)
+      
+      X_background <- train_data |>
+        select(-precrisis3)
+      
+      # Calculate SHAP values
+      shap <- permshap(
+        fit,
+        X = X_test,
+        bg_X = X_background,
+        type = "prob",
+        seed = 123
+      )
+      
+      list(
+        year = y,
+        shap = shap,
+        data = test_data
+      )
+    }
+  )
+}
+
+
+rf_full_shap <- forecast_rf_shap(
+  data = panels_ml$full,
+  best_params = best_rf$full,
+  forecast_years = 2005:2022
+)
+
+
+
+
+
+
+
+# Mülleimer ==================================================================
+
+# 4 Preprocessing ===========================================================
+
+# panel_temp <- panel |> 
+#   # Remove crisis years
+#   filter(crisis != 1) |> 
+#   # Convert precrisis variable into a factor
+#   mutate(precrisis3 = factor(precrisis3, levels = c(0, 1)))
+# 
+# # Baseline model panel
+# panel_ml1 <- panel_temp |> 
+#   # Select predictors and important columns
+#   select(iso3c, year, precrisis3, advanced, cgdppriv, tlpriv_rgrowth, govcgdp) |> 
+#   # Drop NAs
+#   drop_na()
+# 
+# # Broad model panel
+# panel_ml2 <- panel_temp |> 
+#   # Select predictors and important columns
+#   select(iso3c, year, precrisis3, advanced, cgdppriv, tlpriv_rgrowth, govcgdp, inflation, rgdpgrowth, ltd, bcagdp) |> 
+#   # Drop NAs
+#   drop_na()
+# 
+# # Full model panel
+# panel_ml3 <- panel_temp |> 
+#   # Select predictors and important columns
+#   select(iso3c, year, precrisis3, advanced, cgdppriv, tlpriv_rgrowth, govcgdp, inflation, rgdpgrowth, ltd, bcagdp, bm_rgrowth, bmgdp, bmtr, sprr) |> 
+#   # Drop NAs
+#   drop_na()
+# 
+# # 4 Estimate Machine Learning Models =========================================
+# 
+# # Create training sets
+# train1 <- panel_ml1 |>
+#   filter(year <= 2004)
+# 
+# train2 <- panel_ml2 |>
+#   filter(year <= 2004)
+# 
+# train3 <- panel_ml3 |>
+#   filter(year <= 2004)
+# 
+# # Create cross-validation folds
+# cv_periods <- tibble(
+#   id = paste0("Fold", 1:14),
+#   analysis_start = 1970,
+#   analysis_end = 1990:2003,
+#   assessment_start = 1991:2004,
+#   assessment_end = 1991:2004
+# )
+# 
+# make_split <- function(data, analysis_start, analysis_end, assessment_start, assessment_end) {
+#   
+#   make_splits(
+#     x = list(
+#       analysis = which(data$year >= analysis_start & data$year <= analysis_end),
+#       assessment = which(data$year >= assessment_start & data$year <= assessment_end)
+#     ),
+#     data = data
+#   )
+# }
+# 
+# folds1 <- manual_rset(
+#   splits = pmap(
+#     list(
+#       cv_periods$analysis_start,
+#       cv_periods$analysis_end,
+#       cv_periods$assessment_start,
+#       cv_periods$assessment_end
+#     ),
+#     ~ make_split(
+#       train1,
+#       ..1, ..2, ..3, ..4
+#     )
+#   ),
+#   ids = cv_periods$id
+# )
+# 
+# folds2 <- manual_rset(
+#   splits = pmap(
+#     list(
+#       cv_periods$analysis_start,
+#       cv_periods$analysis_end,
+#       cv_periods$assessment_start,
+#       cv_periods$assessment_end
+#     ),
+#     ~ make_split(
+#       train2,
+#       ..1, ..2, ..3, ..4
+#     )
+#   ),
+#   ids = cv_periods$id
+# )
+# 
+# folds3 <- manual_rset(
+#   splits = pmap(
+#     list(
+#       cv_periods$analysis_start,
+#       cv_periods$analysis_end,
+#       cv_periods$assessment_start,
+#       cv_periods$assessment_end
+#     ),
+#     ~ make_split(
+#       train3,
+#       ..1, ..2, ..3, ..4
+#     )
+#   ),
+#   ids = cv_periods$id
+# )
+# 
+# forecast_years <- 2005:2022
+# 
+# # 4.1 Random Forests =========================================================
+# 
+# # Baseline Model
+# 
+# rec_rf1 <- recipe(precrisis3 ~ ., data = panel_ml1) |>
+#   step_rm(iso3c, year)
+# 
+# mod_rf1 <- rand_forest(
+#   trees = 500,
+#   mtry = tune(),
+#   min_n = tune()
+#   ) |>
+#   set_engine(
+#     engine = "ranger",
+#     importance = "permutation"
+#   ) |>
+#   set_mode("classification")
+# 
+# wf_rf1 <- workflow() |>
+#   add_recipe(rec_rf1) |>
+#   add_model(mod_rf1)
+# 
+# # Number of predictors
+# n_predictors1 <- train1 |>
+#   select(-precrisis3, -iso3c, -year) |>
+#   ncol()
+# 
+# # Create the grid
+# set.seed(123)
+# 
+# rf_grid1 <- grid_random(
+#   mtry(range = c(2L, n_predictors1)),
+#   min_n(range = c(2L, 30L)),
+#   size = 30
+# )
+# 
+# 
+# # Parallel processing
+# n_cores <- detectCores()
+# n_cores
+# 
+# cl <- makePSOCKcluster(n_cores - 1)
+# registerDoParallel(cl)
+# 
+# 
+# # Tune Hyperparameters
+# rf_tuned1 <- tune_grid(
+#   wf_rf1,
+#   resamples = folds1,
+#   grid = rf_grid1,
+#   metrics = metric_set(roc_auc),
+#   control = control_grid(save_pred = TRUE, verbose = TRUE)
+# )
+# 
+# stopCluster(cl)
+# 
+# show_best(rf_tuned1, metric = "roc_auc")
+# 
+# best_rf1 <- select_best(rf_tuned1, metric = "roc_auc")
+# 
+# # Actual pseudo oos forecasting
+# 
+# final_wf1 <- finalize_workflow(wf_rf1, best_rf1)
+# 
+# rf_oos_results1 <- map_dfr(
+#   forecast_years,
+#   function(y) {
+#     
+#     train_data <- panel_ml1 |>
+#       filter(.data$year >= 1970, .data$year <= .env$y - 1)
+#     
+#     test_data <- panel_ml1 |>
+#       filter(.data$year == .env$y)
+#     
+#     fit <- final_wf1 |>
+#       fit(data = train_data)
+#     
+#     predictions <- predict(
+#       fit,
+#       new_data = test_data,
+#       type = "prob"
+#     )
+#     
+#     test_data |>
+#       select(iso3c, year, precrisis3) |>
+#       bind_cols(predictions)
+#   }
+# )
+# 
+# 
+# # Evaluate
+# roc_auc(
+#   rf_oos_results1,
+#   truth = precrisis3,
+#   .pred_1,
+#   event_level = "second"
+# )
+# 
+# rf_oos_results1 |>
+#   roc_curve(
+#     truth = precrisis3,
+#     .pred_1,
+#     event_level = "second"
+#   ) |>
+#   autoplot()
+# 
+# # Broad model
+# 
+# 
+# rec_rf2 <- recipe(precrisis3 ~ ., data = panel_ml2) |>
+#   step_rm(iso3c, year)
+# 
+# mod_rf2 <- rand_forest(
+#   trees = 500,
+#   mtry = tune(),
+#   min_n = tune()
+# ) |>
+#   set_engine(
+#     engine = "ranger",
+#     importance = "permutation"
+#   ) |>
+#   set_mode("classification")
+# 
+# wf_rf2 <- workflow() |>
+#   add_recipe(rec_rf2) |>
+#   add_model(mod_rf2)
+# 
+# # Number of predictors
+# n_predictors2 <- train2 |>
+#   select(-precrisis3, -iso3c, -year) |>
+#   ncol()
+# 
+# # Create the grid
+# set.seed(123)
+# 
+# rf_grid2 <- grid_random(
+#   mtry(range = c(2L, n_predictors2)),
+#   min_n(range = c(2L, 30L)),
+#   size = 30
+# )
+# 
+# 
+# # Parallel processing
+# n_cores <- detectCores()
+# n_cores
+# 
+# cl <- makePSOCKcluster(n_cores - 1)
+# registerDoParallel(cl)
+# 
+# 
+# # Tune Hyperparameters
+# rf_tuned2 <- tune_grid(
+#   wf_rf2,
+#   resamples = folds2,
+#   grid = rf_grid2,
+#   metrics = metric_set(roc_auc),
+#   control = control_grid(save_pred = TRUE, verbose = TRUE)
+# )
+# 
+# stopCluster(cl)
+# 
+# show_best(rf_tuned2, metric = "roc_auc")
+# 
+# best_rf2 <- select_best(rf_tuned2, metric = "roc_auc")
+# 
+# # Actual pseudo oos forecasting
+# 
+# final_wf2 <- finalize_workflow(wf_rf2, best_rf2)
+# 
+# rf_oos_results2 <- map_dfr(
+#   forecast_years,
+#   function(y) {
+#     
+#     train_data <- panel_ml2 |>
+#       filter(.data$year >= 1970, .data$year <= .env$y - 1)
+#     
+#     test_data <- panel_ml2 |>
+#       filter(.data$year == .env$y)
+#     
+#     fit <- final_wf2 |>
+#       fit(data = train_data)
+#     
+#     predictions <- predict(
+#       fit,
+#       new_data = test_data,
+#       type = "prob"
+#     )
+#     
+#     test_data |>
+#       select(iso3c, year, precrisis3) |>
+#       bind_cols(predictions)
+#   }
+# )
+# 
+# 
+# # Evaluate
+# roc_auc(
+#   rf_oos_results2,
+#   truth = precrisis3,
+#   .pred_1,
+#   event_level = "second"
+# )
+# 
+# rf_oos_results2 |>
+#   roc_curve(
+#     truth = precrisis3,
+#     .pred_1,
+#     event_level = "second"
+#   ) |>
+#   autoplot()
+# 
+# 
+# # Full model
+# 
+# rec_rf3 <- recipe(precrisis3 ~ ., data = panel_ml3) |>
+#   step_rm(iso3c, year)
+# 
+# mod_rf3 <- rand_forest(
+#   trees = 500,
+#   mtry = tune(),
+#   min_n = tune()
+# ) |>
+#   set_engine(
+#     engine = "ranger",
+#     importance = "permutation"
+#   ) |>
+#   set_mode("classification")
+# 
+# wf_rf3 <- workflow() |>
+#   add_recipe(rec_rf3) |>
+#   add_model(mod_rf3)
+# 
+# # Number of predictors
+# n_predictors3 <- train3 |>
+#   select(-precrisis3, -iso3c, -year) |>
+#   ncol()
+# 
+# # Create the grid
+# set.seed(123)
+# 
+# rf_grid3 <- grid_random(
+#   mtry(range = c(2L, n_predictors3)),
+#   min_n(range = c(2L, 30L)),
+#   size = 30
+# )
+# 
+# 
+# # Parallel processing
+# n_cores <- detectCores()
+# n_cores
+# 
+# cl <- makePSOCKcluster(n_cores - 1)
+# registerDoParallel(cl)
+# 
+# 
+# # Tune Hyperparameters
+# rf_tuned3 <- tune_grid(
+#   wf_rf3,
+#   resamples = folds3,
+#   grid = rf_grid3,
+#   metrics = metric_set(roc_auc),
+#   control = control_grid(save_pred = TRUE, verbose = TRUE)
+# )
+# 
+# stopCluster(cl)
+# 
+# show_best(rf_tuned3, metric = "roc_auc")
+# 
+# best_rf3 <- select_best(rf_tuned3, metric = "roc_auc")
+# 
+# # Actual pseudo oos forecasting
+# 
+# final_wf3 <- finalize_workflow(wf_rf3, best_rf3)
+# 
+# rf_oos_results3 <- map_dfr(
+#   forecast_years,
+#   function(y) {
+#     
+#     train_data <- panel_ml3 |>
+#       filter(.data$year >= 1970, .data$year <= .env$y - 1)
+#     
+#     test_data <- panel_ml3 |>
+#       filter(.data$year == .env$y)
+#     
+#     fit <- final_wf3 |>
+#       fit(data = train_data)
+#     
+#     predictions <- predict(
+#       fit,
+#       new_data = test_data,
+#       type = "prob"
+#     )
+#     
+#     test_data |>
+#       select(iso3c, year, precrisis3) |>
+#       bind_cols(predictions)
+#   }
+# )
+# 
+# 
+# # Evaluate
+# roc_auc(
+#   rf_oos_results3,
+#   truth = precrisis3,
+#   .pred_1,
+#   event_level = "second"
+# )
+# 
+# rf_oos_results3 |>
+#   roc_curve(
+#     truth = precrisis3,
+#     .pred_1,
+#     event_level = "second"
+#   ) |>
+#   autoplot()
+
+
+
+
+
 
 
 
@@ -773,125 +1118,125 @@ rf_auc
 
 # 4.2 Support Vector Machine ================================================
 
-# SVM recipe
-
-rec_svm <- recipe(precrisis3 ~ ., data = panel_ml) |>
-  step_rm(iso3c, year) |>
-  step_normalize(all_numeric_predictors())
-
-# SVM model
-
-mod_svm <- svm_rbf(
-  cost = tune(),
-  rbf_sigma = tune()
-  ) |>
-  set_engine("kernlab") |>
-  set_mode("classification")
-
-
-# Workflow
-
-wf_svm <- workflow() |>
-  add_recipe(rec_svm) |>
-  add_model(mod_svm)
-
-
-# Hyperparameter grid
-
-set.seed(123)
-
-svm_grid <- grid_regular(
-  cost(range = c(-3, 3)),
-  rbf_sigma(range = c(-3, 0)),
-  levels = 7
-  )
-
-
-# Tune
-
-svm_tuned <- tune_grid(
-  wf_svm,
-  resamples = folds,
-  grid = svm_grid,
-  metrics = metric_set(roc_auc),
-  control = control_grid(save_pred = T, verbose = T)
-  )
-
-
-# Results
-
-show_best(
-  svm_tuned,
-  metric = "roc_auc"
-  )
-
-# Select best model
-
-best_svm <- select_best(
-  svm_tuned,
-  metric = "roc_auc"
-  )
-
-
-# Final model
-
-final_svm_wf <- finalize_workflow(
-  wf_svm,
-  best_svm
-  )
-
-# Out-of-sample predictions
-
-svm_oos_results <- map_dfr(
-  forecast_years,
-  function(y) {
-    
-    train_data <- panel_ml |>
-      filter(.data$year >= 1970, .data$year <= .env$y - 1)
-    
-    test_data <- panel_ml |>
-      filter(.data$year == .env$y)
-    
-    fit <- final_svm_wf |>
-      fit(data = train_data)
-    
-    predictions <- predict(
-      fit,
-      new_data = test_data,
-      type = "prob"
-    )
-    
-    test_data |>
-      select(iso3c, year, precrisis3) |>
-      bind_cols(predictions)
-  }
-)
-
-
-# Evaluation
-
-roc_auc(
-  svm_oos_results,
-  truth = precrisis3,
-  .pred_1,
-  event_level = "second"
-  )
-
-# ROC curve
-
-svm_oos_results |>
-  mutate(
-    precrisis3 = factor(
-      precrisis3,
-      levels = c(0, 1)
-    )
-  ) |>
-  roc_curve(
-    truth = precrisis3,
-    .pred_1,
-    event_level = "second"
-  ) |>
-  autoplot()
+# # SVM recipe
+# 
+# rec_svm <- recipe(precrisis3 ~ ., data = panel_ml) |>
+#   step_rm(iso3c, year) |>
+#   step_normalize(all_numeric_predictors())
+# 
+# # SVM model
+# 
+# mod_svm <- svm_rbf(
+#   cost = tune(),
+#   rbf_sigma = tune()
+# ) |>
+#   set_engine("kernlab") |>
+#   set_mode("classification")
+# 
+# 
+# # Workflow
+# 
+# wf_svm <- workflow() |>
+#   add_recipe(rec_svm) |>
+#   add_model(mod_svm)
+# 
+# 
+# # Hyperparameter grid
+# 
+# set.seed(123)
+# 
+# svm_grid <- grid_regular(
+#   cost(range = c(-3, 3)),
+#   rbf_sigma(range = c(-3, 0)),
+#   levels = 7
+# )
+# 
+# 
+# # Tune
+# 
+# svm_tuned <- tune_grid(
+#   wf_svm,
+#   resamples = folds,
+#   grid = svm_grid,
+#   metrics = metric_set(roc_auc),
+#   control = control_grid(save_pred = T, verbose = T)
+# )
+# 
+# 
+# # Results
+# 
+# show_best(
+#   svm_tuned,
+#   metric = "roc_auc"
+# )
+# 
+# # Select best model
+# 
+# best_svm <- select_best(
+#   svm_tuned,
+#   metric = "roc_auc"
+# )
+# 
+# 
+# # Final model
+# 
+# final_svm_wf <- finalize_workflow(
+#   wf_svm,
+#   best_svm
+# )
+# 
+# # Out-of-sample predictions
+# 
+# svm_oos_results <- map_dfr(
+#   forecast_years,
+#   function(y) {
+#     
+#     train_data <- panel_ml |>
+#       filter(.data$year >= 1970, .data$year <= .env$y - 1)
+#     
+#     test_data <- panel_ml |>
+#       filter(.data$year == .env$y)
+#     
+#     fit <- final_svm_wf |>
+#       fit(data = train_data)
+#     
+#     predictions <- predict(
+#       fit,
+#       new_data = test_data,
+#       type = "prob"
+#     )
+#     
+#     test_data |>
+#       select(iso3c, year, precrisis3) |>
+#       bind_cols(predictions)
+#   }
+# )
+# 
+# 
+# # Evaluation
+# 
+# roc_auc(
+#   svm_oos_results,
+#   truth = precrisis3,
+#   .pred_1,
+#   event_level = "second"
+# )
+# 
+# # ROC curve
+# 
+# svm_oos_results |>
+#   mutate(
+#     precrisis3 = factor(
+#       precrisis3,
+#       levels = c(0, 1)
+#     )
+#   ) |>
+#   roc_curve(
+#     truth = precrisis3,
+#     .pred_1,
+#     event_level = "second"
+#   ) |>
+#   autoplot()
 
 
 
@@ -908,93 +1253,122 @@ svm_oos_results |>
 # summary(train_processed)
 
 
+
+
+
+
 ## 4.3 Multilayer Perceptron ==================================================
 
-rec_mlp <- recipe(precrisis3 ~ ., data = panel_ml) |>
-  step_rm(iso3c, year) |>
-  step_normalize(all_numeric_predictors())
+# rec_mlp <- recipe(precrisis3 ~ ., data = panel_ml) |>
+#   step_rm(iso3c, year) |>
+#   step_normalize(all_numeric_predictors())
+# 
+# mod_mlp <- mlp(
+#   hidden_units = tune(),
+#   penalty = tune(),
+#   epochs = 100,
+#   activation = "relu"
+# ) |>
+#   set_engine("brulee") |>
+#   set_mode("classification")
+# 
+# wf_mlp <- workflow() |>
+#   add_recipe(rec_mlp) |>
+#   add_model(mod_mlp)
+# 
+# # Tune Hyperparameters
+# set.seed(123)
+# 
+# mlp_grid <- grid_regular(
+#   hidden_units(range = c(2L, 20L)),
+#   penalty(range = c(-6, 1)),
+#   levels = c(5,5)
+# )
+# 
+# mlp_tuned <- tune_grid(
+#   wf_mlp,
+#   resamples = folds,
+#   grid = mlp_grid,
+#   metrics = metric_set(roc_auc),
+#   control = control_grid(save_pred = T, verbose = T)
+# )
+# 
+# show_best(
+#   mlp_tuned,
+#   metric = "roc_auc"
+# )
+# 
+# best_mlp <- select_best(
+#   mlp_tuned,
+#   metric = "roc_auc"
+# )
+# 
+# final_wf_mlp <- finalize_workflow(
+#   wf_mlp,
+#   best_mlp
+# )
+# 
+# mlp_oos_results <- map_dfr(
+#   forecast_years,
+#   function(y) {
+#     
+#     train_data <- panel_ml |>
+#       filter(.data$year >= 1970, .data$year <= .env$y - 1)
+#     
+#     test_data <- panel_ml |>
+#       filter(.data$year == .env$y)
+#     
+#     fit <- final_wf_mlp |>
+#       fit(data = train_data)
+#     
+#     predictions <- predict(
+#       fit,
+#       new_data = test_data,
+#       type = "prob"
+#     )
+#     
+#     test_data |>
+#       select(iso3c, year, precrisis3) |>
+#       bind_cols(predictions)
+#   }
+# )
+# 
+# roc_auc(
+#   mlp_oos_results,
+#   truth = precrisis3,
+#   .pred_1,
+#   event_level = "second"
+# )
+# 
+# mlp_oos_results |>
+#   roc_curve(
+#     truth = precrisis3,
+#     .pred_1,
+#     event_level = "second"
+#   ) |>
+#   autoplot()
 
-mod_mlp <- mlp(
-  hidden_units = tune(),
-  penalty = tune(),
-  epochs = 100,
-  activation = "relu"
-  ) |>
-  set_engine("brulee") |>
-  set_mode("classification")
 
-wf_mlp <- workflow() |>
-  add_recipe(rec_mlp) |>
-  add_model(mod_mlp)
 
-# Tune Hyperparameters
-set.seed(123)
 
-mlp_grid <- grid_regular(
-  hidden_units(range = c(2L, 20L)),
-  penalty(range = c(-6, 1)),
-  levels = c(5,5)
-)
 
-mlp_tuned <- tune_grid(
-  wf_mlp,
-  resamples = folds,
-  grid = mlp_grid,
-  metrics = metric_set(roc_auc),
-  control = control_grid(save_pred = T, verbose = T)
-  )
 
-show_best(
-  mlp_tuned,
-  metric = "roc_auc"
-  )
 
-best_mlp <- select_best(
-  mlp_tuned,
-  metric = "roc_auc"
-  )
 
-final_wf_mlp <- finalize_workflow(
-  wf_mlp,
-  best_mlp
-  )
 
-mlp_oos_results <- map_dfr(
-  forecast_years,
-  function(y) {
-    
-    train_data <- panel_ml |>
-      filter(.data$year >= 1970, .data$year <= .env$y - 1)
-    
-    test_data <- panel_ml |>
-      filter(.data$year == .env$y)
-    
-    fit <- final_wf_mlp |>
-      fit(data = train_data)
-    
-    predictions <- predict(
-      fit,
-      new_data = test_data,
-      type = "prob"
-    )
-    
-    test_data |>
-      select(iso3c, year, precrisis3) |>
-      bind_cols(predictions)
-  }
-)
 
-roc_auc(
-  mlp_oos_results,
-  truth = precrisis3,
-  .pred_1,
-  event_level = "second"
-  )
 
-mlp_oos_results |>
-  roc_curve(
-    truth = precrisis3,
-    .pred_1,
-    event_level = "second"
-  ) |>
-  autoplot()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
