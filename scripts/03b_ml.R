@@ -13,6 +13,7 @@ library(foreach)
 library(doParallel)
 library(kernelshap)
 library(shapviz)
+library(themis)
 
 # 2 Load Panel ===============================================================
 
@@ -37,6 +38,17 @@ par(family = "serif")
 
 
 # 4. Preprocessing ============================================================
+
+# Logit Panel
+
+panel_logit <- panel |> 
+  filter(crisis != 1) |> 
+  mutate(
+    advanced = factor(advanced),
+    precrisis3 = factor(precrisis3)
+    )
+
+# ML Panels
 
 panel_temp <- panel |>
   filter(crisis != 1) |>
@@ -80,6 +92,153 @@ train <- map(
   \(data) filter(data, year <= 2004)
   )
 
+
+# 5 Estimate Logit Models =====================================================
+
+## 5.1 In-Sample ==============================================================
+
+# Custom model summary
+gof_custom <- function(model) {
+  
+  # Model data
+  mf <- model.frame(model)
+  
+  # Identify observations used by the model
+  rows <- as.integer(rownames(mf))
+  
+  # Countries in estimation sample
+  countries <- unique(panel_logit$iso3c[rows])
+  
+  # Number of countries
+  n_countries <- length(countries)
+  
+  # Number of crisis observations for these countries
+  n_crises <- panel |>
+    filter(
+      iso3c %in% countries,
+      crisis_start == 1
+    ) |>
+    nrow()
+  
+  # Predicted probabilities
+  p <- predict(model, type = "response")
+  
+  # Actual outcome
+  y <- model.response(mf)
+  
+  # AUC
+  auc_value <- as.numeric(pROC::auc(y, p))
+  
+  # McFadden R²
+  ll_model <- as.numeric(logLik(model))
+  
+  null_model <- glm(
+    y ~ 1,
+    family = binomial()
+  )
+  
+  ll_null <- as.numeric(logLik(null_model))
+  
+  mcfadden_r2 <- 1 - ll_model / ll_null
+  
+  data.frame(
+    `Num. Countries` = n_countries,
+    `Num. Crises` = n_crises,
+    `AUC` = round(auc_value, 3),
+    `McFadden R²` = round(mcfadden_r2, 3)
+  )
+}
+
+# Fitting models in-sample
+models <- list()
+
+formulas <- list(
+  baseline = precrisis3 ~ advanced + cgdppriv + govcgdp + tlpriv_rgrowth,
+  broad = precrisis3 ~ advanced + cgdppriv + govcgdp + tlpriv_rgrowth + rgdpgrowth + inflation + ltd  + bcagdp,
+  full = precrisis3 ~ advanced + cgdppriv + govcgdp + tlpriv_rgrowth + rgdpgrowth + inflation + ltd  + bcagdp + bm_rgrowth + bmgdp + bmtr + sprr
+  # Model8 = precrisis3 ~ advanced + cgdpcorp + cgdph + tlcorp_rgrowth + tlh_rgrowth + rgdpgrowth + inflation + ltd + govcgdp + bcagdp + bm_rgrowth + bmgdp + bmtr + ycurve + sprr + ppgrowth
+)
+
+# Fit models
+models <- lapply(
+  formulas,
+  \(f) glm(
+    formula = f,
+    data = panel_logit,
+    family = binomial()
+  )
+)
+
+# Summarize results
+modelsummary(
+  models,
+  title = "Title",
+  gof_function = gof_custom,
+  gof_omit = "RMSE|Log.Lik.|Std.Errors|AUC",
+  coef_omit = "(Intercept)",
+  stars = TRUE,
+  vcov = ~iso3c
+)
+
+## 5.2 Out-of-sample ==========================================================
+
+forecast_logit <- function(formula, data, forecast_years) {
+  
+  predictions <- lapply(forecast_years, function(test_year) {
+    
+    # Expanding training window
+    train <- data |>
+      filter(year < test_year)
+    
+    # One-year test set
+    test <- data |>
+      filter(year == test_year)
+    
+    # Estimate model
+    model <- glm(formula = formula, data = train, family = binomial())
+    
+    # Predict test year
+    test |>
+      mutate(.pred_1 = predict(model, newdata = test, type = "response"))
+    
+  })
+  
+  bind_rows(predictions)
+}
+
+forecast_years <- 2005:2022
+
+logit_oos_results <- lapply(
+  X = formulas,
+  FUN = forecast_logit,
+  data = panel_logit,
+  forecast_years = forecast_years
+)
+
+names(logit_oos_results) <- names(formulas)
+
+evaluate <- function(results) {
+  
+  roc <- roc_auc(
+    results,
+    truth = precrisis3,
+    .pred_1,
+    event_level = "second"
+  )
+  
+  pr <- pr_auc(
+    results,
+    truth = precrisis3,
+    .pred_1,
+    event_level = "second"
+  )
+  
+  rbind(roc, pr)
+}
+
+# Compute AUC
+
+logit_auc <- map(logit_oos_results, evaluate) |> list_rbind(names_to = "specification")
 
 # 4. Cross-validation =========================================================
 
@@ -173,21 +332,24 @@ make_rf_grid <- function(data, size = 30) {
 
 
 # Tune one model
-tune_rf <- function(data, folds, grid_size = 30) {
+tune_model <- function(data, folds, model_type = c("rf", "svm", "mlp"), grid_size = 30) {
   
-  workflow <- make_rf_workflow(data)
-  grid <- make_rf_grid(data, grid_size)
+  model_type <- match.arg(model_type)
+  
+  workflow_fn <- match.fun(paste0("make_", model_type, "_workflow"))
+  grid_fn     <- match.fun(paste0("make_", model_type, "_grid"))
+  
+  workflow <- workflow_fn(data)
+  grid     <- grid_fn(data, grid_size)
   
   tune_grid(
     workflow,
     resamples = folds,
     grid = grid,
-    metrics = metric_set(roc_auc),
-    control = control_grid(save_pred = TRUE, verbose = TRUE
-    )
+    metrics = metric_set(pr_auc),
+    control = control_grid(save_pred = T, verbose = T)
   )
 }
-
 
 # Tune all specifications
 set.seed(123)
@@ -197,11 +359,7 @@ n_cores <- detectCores() - 1
 cl <- makePSOCKcluster(n_cores)
 registerDoParallel(cl)
 
-rf_tuned <- map2(
-  train,
-  folds,
-  tune_rf
-)
+rf_tuned <- map2(train, folds, \(d, f) tune_model(d, f, model_type = "rf"))
 
 stopCluster(cl)
 
@@ -209,7 +367,7 @@ stopCluster(cl)
 # Best hyperparameters
 best_rf <- map(
   rf_tuned,
-  \(x) select_best(x, metric = "roc_auc")
+  \(x) select_best(x, metric = "pr_auc")
 )
 
 
@@ -221,15 +379,20 @@ map(best_rf, \(x) x)
 
 forecast_years <- 2005:2022
 
-
-forecast_rf <- function(data, best_params, forecast_years) {
+forecast_model <- function(data, best_params, forecast_years, model_type = c("rf", "svm", "mlp")) {
   
-  final_workflow <- make_rf_workflow(data) |>
+  model_type <- match.arg(model_type)
+  
+  workflow_fn <- match.fun(paste0("make_", model_type, "_workflow"))
+  
+  final_workflow <- workflow_fn(data) |>
     finalize_workflow(best_params)
   
-  map_dfr(
+  map(
     forecast_years,
     function(y) {
+      
+      message("Forecasting year: ", y)
       
       train_data <- data |>
         filter(year >= 1970, year <= y - 1)
@@ -250,39 +413,20 @@ forecast_rf <- function(data, best_params, forecast_years) {
         select(iso3c, year, precrisis3) |>
         bind_cols(predictions)
     }
-  )
+  ) |>
+    list_rbind()
 }
 
 
 # Forecast all three specifications
+
 rf_oos_results <- map2(
   panels_ml,
   best_rf,
-  \(data, params)
-  forecast_rf(data, params, forecast_years)
+  \(data, params) forecast_model(data, params, forecast_years, model_type = "rf")
 )
 
-
 # 4.3 Evaluation =============================================================
-
-evaluate <- function(results) {
-  
-  roc <- roc_auc(
-    results,
-    truth = precrisis3,
-    .pred_1,
-    event_level = "second"
-  )
-  
-  pr <- pr_auc(
-    results,
-    truth = precrisis3,
-    .pred_1,
-    event_level = "second"
-  )
-  
-  rbind(roc, pr)
-}
 
 
 rf_auc <- map(rf_oos_results, evaluate) |> list_rbind(names_to = "specification")
@@ -295,6 +439,10 @@ make_svm_workflow <- function(data) {
   recipe(precrisis3 ~ ., data = data) |>
     step_rm(iso3c, year) |>
     step_normalize(all_predictors()) |>
+    step_upsample(
+      precrisis3,
+      over_ratio = 1
+    ) |> 
     workflow() |>
     add_model(
       svm_rbf(
@@ -308,7 +456,7 @@ make_svm_workflow <- function(data) {
 
 
 # Hyperparameter grid
-make_svm_grid <- function(size = 30) {
+make_svm_grid <- function(data, size = 30) {
   
   grid_space_filling(
     cost(),
@@ -317,44 +465,14 @@ make_svm_grid <- function(size = 30) {
   )
 }
 
-
-# Tune one SVM specification
-tune_svm <- function(data, folds, grid_size = 30) {
-  
-  workflow <- make_svm_workflow(data)
-  
-  grid <- make_svm_grid(grid_size)
-  
-  tune_grid(
-    workflow,
-    resamples = folds,
-    grid = grid,
-    metrics = metric_set(roc_auc),
-    control = control_grid(
-      save_pred = TRUE,
-      verbose = TRUE
-    )
-  )
-}
-
-
 # Tune all specifications =====================================================
 
 set.seed(123)
 
-n_cores <- detectCores() - 1
-
 cl <- makePSOCKcluster(n_cores)
-
 registerDoParallel(cl)
 
-
-svm_tuned <- map2(
-  train,
-  folds,
-  tune_svm
-)
-
+svm_tuned <- map2(train, folds, \(d, f) tune_model(d, f, model_type = "svm"))
 
 stopCluster(cl)
 
@@ -363,66 +481,18 @@ stopCluster(cl)
 
 best_svm <- map(
   svm_tuned,
-  \(x) select_best(x, metric = "roc_auc")
+  \(x) select_best(x, metric = "pr_auc")
 )
 
 
 best_svm
-
-
-# Pseudo-OOS forecasting ======================================================
-
-forecast_svm <- function(data, best_params, forecast_years) {
-  
-  final_workflow <- make_svm_workflow(data) |>
-    finalize_workflow(best_params)
-  
-  map_dfr(
-    forecast_years,
-    function(y) {
-      
-      train_data <- data |>
-        filter(year >= 1970, year <= y - 1)
-      
-      test_data <- data |>
-        filter(year == y)
-      
-      
-      fit <- final_workflow |>
-        fit(data = train_data)
-      
-      
-      predictions <- predict(
-        fit,
-        new_data = test_data,
-        type = "prob"
-      )
-      
-      
-      test_data |>
-        select(
-          iso3c,
-          year,
-          precrisis3
-        ) |>
-        bind_cols(predictions)
-    }
-  )
-}
-
 
 # Forecast all three specifications ===========================================
 
 svm_oos_results <- map2(
   panels_ml,
   best_svm,
-  \(data, params) {
-    forecast_svm(
-      data,
-      params,
-      forecast_years
-    )
-  }
+  \(data, params) forecast_model(data, params, forecast_years, model_type = "svm")
 )
 
 # Evaluate SVMs ===============================================================
@@ -449,7 +519,7 @@ make_mlp_workflow <- function(data) {
     )
 }
 
-make_mlp_grid <- function(size = 10) {
+make_mlp_grid <- function(data, size = 10) {
   
   grid_space_filling(
     hidden_units(range = c(1L, 5L)),
@@ -458,38 +528,15 @@ make_mlp_grid <- function(size = 10) {
   )
 }
 
-tune_mlp <- function(data, folds, grid_size = 10) {
-  
-  workflow <- make_mlp_workflow(data)
-  
-  grid <- make_mlp_grid(grid_size)
-  
-  tune_grid(
-    workflow,
-    resamples = folds,
-    grid = grid,
-    metrics = metric_set(roc_auc),
-    control = control_grid(save_pred = TRUE, verbose = TRUE)
-  )
-}
-
 # Tune all MLP specifications ================================================
 
 set.seed(123)
-
-n_cores <- detectCores() - 1
 
 cl <- makePSOCKcluster(n_cores)
 
 registerDoParallel(cl)
 
-
-mlp_tuned <- map2(
-  train,
-  folds,
-  tune_mlp
-)
-
+mlp_tuned <- map2(train, folds, \(d, f) tune_model(d, f, model_type = "mlp"))
 
 stopCluster(cl)
 
@@ -502,60 +549,21 @@ best_mlp <- map(
 
 best_mlp
 
-
-forecast_mlp <- function(data, best_params, forecast_years) {
-  
-  final_workflow <- make_mlp_workflow(data) |>
-    finalize_workflow(best_params)
-  
-  map_dfr(
-    forecast_years,
-    function(y) {
-      
-      train_data <- data |>
-        filter(year >= 1970, year <= y - 1)
-      
-      test_data <- data |>
-        filter(year == y)
-      
-      fit <- final_workflow |>
-        fit(data = train_data)
-      
-      predictions <- predict(
-        fit,
-        new_data = test_data,
-        type = "prob"
-      )
-      
-      test_data |>
-        select(
-          iso3c,
-          year,
-          precrisis3
-        ) |>
-        bind_cols(predictions)
-    }
-  )
-}
-
 mlp_oos_results <- map2(
   panels_ml,
   best_mlp,
-  \(data, params) {
-    forecast_mlp(
-      data,
-      params,
-      forecast_years
-    )
-  }
+  \(data, params) forecast_model(data, params, forecast_years, model_type = "mlp")
 )
 
 
 mlp_auc <- map(mlp_oos_results, evaluate) |> list_rbind(names_to = "specification")
 
 
-# Evaluate all ML results
+# Evaluate all ML results ===================================================
 model_auc <- bind_rows(
+  
+  logit_auc |> 
+    mutate(model = "Logit"),
   
   rf_auc |>
     mutate(model = "Random Forest"),
@@ -582,27 +590,100 @@ model_auc |>
   arrange(.metric)
 
 
-# ROC Curves =================================================================
+# ROC and PR Curves =================================================================
 
-# RF
-map(
-  rf_oos_results, 
-  \(x) roc_curve(x, truth = precrisis3, .pred_1, event_level = "second") |> autoplot()
+oos_results <- list(
+  Logit = logit_oos_results,
+  MLP   = mlp_oos_results,
+  SVM   = svm_oos_results,
+  RF    = rf_oos_results
 )
 
-# SVM
-map(
-  svm_oos_results, 
-  \(x) roc_curve(x, truth = precrisis3, .pred_1, event_level = "second") |> autoplot()
-)
+create_roc <- function(model_results, specification, model_name) {
+  
+  model_results[[specification]] |>
+    roc_curve(
+      truth = precrisis3,
+      .pred_1,
+      event_level = "second"
+    ) |>
+    mutate(
+      model = model_name,
+      specification = specification
+    )
+}
 
+create_pr <- function(model_results, specification, model_name) {
+  
+  model_results[[specification]] |>
+    pr_curve(
+      truth = precrisis3,
+      .pred_1,
+      event_level = "second"
+    ) |>
+    mutate(
+      model = model_name,
+      specification = specification
+    )
+}
 
-# MLP
-map(
-  mlp_oos_results, 
-  \(x) roc_curve(x, truth = precrisis3, .pred_1, event_level = "second") |> autoplot()
+create_curves <- function(curve_function) {
+  
+  map(
+    names(specs),
+    function(spec) {
+      
+      imap(
+        oos_results,
+        ~ curve_function(
+          .x,
+          specification = spec,
+          model_name = .y
+        )
+      ) |>
+        list_rbind()
+    }
+  ) |>
+    list_rbind()
+}
+
+roc_all <- create_curves(create_roc)
+pr_all  <- create_curves(create_pr)
+
+ggplot(
+  roc_all,
+  aes(
+    x = 1 - specificity,
+    y = sensitivity,
+    color = model,
+    linetype = model
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_abline(linetype = "dashed") +
+  coord_equal() +
+  facet_wrap(~ specification) +
+  labs(
+    x = "False Positive Rate",
+    y = "True Positive Rate"
   )
 
+ggplot(
+  pr_all,
+  aes(
+    x = recall,
+    y = precision,
+    color = model,
+    linetype = model
+  )
+) +
+  geom_line(linewidth = 1) +
+  coord_equal() +
+  facet_wrap(~ specification) +
+  labs(
+    x = "Recall",
+    y = "Precision"
+  )
 
 
 # Shapley Values =============================================================
@@ -661,7 +742,7 @@ rf_full_shap <- forecast_rf_shap(
 )
 
 
-
+# Robustness Checks ==========================================================
 
 
 

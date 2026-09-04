@@ -190,24 +190,24 @@ forecast_logit <- function(formula, data, forecast_years) {
 
 forecast_years <- 2005:2022
 
-oos_predictions <- lapply(
+logit_oos_results <- lapply(
   X = formulas,
   FUN = forecast_logit,
   data = panel_logit,
   forecast_years = forecast_years
 )
 
-names(oos_predictions) <- names(formulas)
+names(logit_oos_results) <- names(formulas)
 
 oos_auc <- sapply(
-  oos_predictions,
+  logit_oos_results,
   \(x) as.numeric(auc(x$precrisis3, x$pred_prob))
 )
 
 round(oos_auc, 3)
 
 roc_curves <- map(
-  oos_predictions,
+  logit_oos_results,
   \(x) {
     x |>
       mutate(
