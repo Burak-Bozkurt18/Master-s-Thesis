@@ -14,6 +14,7 @@ library(doParallel)
 library(kernelshap)
 library(shapviz)
 library(themis)
+library(treeshap)
 
 # 2 Load Panel ===============================================================
 
@@ -682,59 +683,42 @@ ggplot(
 
 # Shapley Values =============================================================
 
+train_data <- panels_ml$full |>
+  filter(year >= 1970, year <= 2006)
 
-forecast_rf_shap <- function(data, best_params, forecast_years) {
-  
-  final_workflow <- make_rf_workflow(data) |>
-    finalize_workflow(best_params)
-  
-  map(
-    forecast_years,
-    function(y) {
-      
-      train_data <- data |>
-        filter(year >= 1970, year <= y - 1)
-      
-      test_data <- data |>
-        filter(year == y)
-      
-      # Fit model
-      fit <- final_workflow |>
-        fit(data = train_data)
-      
-      # IMPORTANT:
-      # Keep iso3c and year because the workflow expects them.
-      X_test <- test_data |>
-        select(-precrisis3)
-      
-      X_background <- train_data |>
-        select(-precrisis3)
-      
-      # Calculate SHAP values
-      shap <- permshap(
-        fit,
-        X = X_test,
-        bg_X = X_background,
-        type = "prob",
-        seed = 123
-      )
-      
-      list(
-        year = y,
-        shap = shap,
-        data = test_data
-      )
-    }
-  )
-}
+test_data <- panels_ml$full |>
+  filter(year == 2007)
 
+final_workflow <- make_rf_workflow(panels_ml$full) |>
+  finalize_workflow(best_rf$full)
 
-rf_full_shap <- forecast_rf_shap(
-  data = panels_ml$full,
-  best_params = best_rf$full,
-  forecast_years = 2005:2022
+fit <- final_workflow |>
+  fit(data = train_data)
+
+# Extract ranger model
+rf_model <- extract_fit_engine(fit)
+
+X_train <- train_data |>
+  select(-iso3c, -year, -precrisis3)
+
+X_test <- test_data |>
+  select(-iso3c, -year, -precrisis3)
+
+unified_rf <- ranger.unify(rf_model, X_train)
+
+shap_2007 <- treeshap(unified_rf, X_test)
+
+pred <- predict(
+  fit,
+  new_data = test_data,
+  type = "prob"
 )
 
+pred
+
+plot_feature_importance(shap_2007)
+
+plot_contribution(shap_2007, obs = 48)
 
 # Robustness Checks ==========================================================
 
