@@ -361,8 +361,6 @@ registerDoParallel(cl)
 
 rf_tuned <- map2(train, folds, \(d, f) tune_model(d, f, model_type = "rf"))
 
-stopCluster(cl)
-
 
 # Best hyperparameters
 best_rf <- map(
@@ -420,6 +418,8 @@ forecast_model <- function(data, best_params, forecast_years, model_type = c("rf
 
 # Forecast all three specifications
 
+set.seed(123)
+
 rf_oos_results <- map2(
   panels_ml,
   best_rf,
@@ -441,7 +441,7 @@ make_svm_workflow <- function(data) {
     step_normalize(all_predictors()) |>
     step_upsample(
       precrisis3,
-      over_ratio = 1
+      over_ratio = 0.5
     ) |> 
     workflow() |>
     add_model(
@@ -469,13 +469,7 @@ make_svm_grid <- function(data, size = 30) {
 
 set.seed(123)
 
-cl <- makePSOCKcluster(n_cores)
-registerDoParallel(cl)
-
 svm_tuned <- map2(train, folds, \(d, f) tune_model(d, f, model_type = "svm"))
-
-stopCluster(cl)
-
 
 # Best hyperparameters ========================================================
 
@@ -488,6 +482,8 @@ best_svm <- map(
 best_svm
 
 # Forecast all three specifications ===========================================
+
+set.seed(123)
 
 svm_oos_results <- map2(
   panels_ml,
@@ -532,15 +528,9 @@ make_mlp_grid <- function(data, size = 10) {
 
 set.seed(123)
 
-cl <- makePSOCKcluster(n_cores)
-
-registerDoParallel(cl)
-
 mlp_tuned <- map2(train, folds, \(d, f) tune_model(d, f, model_type = "mlp"))
 
-stopCluster(cl)
-
-
+# Select best hyperparameters
 
 best_mlp <- map(
   mlp_tuned,
@@ -548,6 +538,10 @@ best_mlp <- map(
 )
 
 best_mlp
+
+# Out-of-sample predictions
+
+set.seed(123)
 
 mlp_oos_results <- map2(
   panels_ml,
@@ -744,7 +738,7 @@ rf_full_shap <- forecast_rf_shap(
 
 # Robustness Checks ==========================================================
 
-
+stopCluster(cl)
 
 
 # Mülleimer ==================================================================
