@@ -11,10 +11,11 @@ library(modelsummary)
 library(pROC)
 library(foreach)
 library(doParallel)
-library(kernelshap)
+# library(kernelshap)
 library(shapviz)
 library(themis)
 library(treeshap)
+library(patchwork)
 
 # 2 Load Panel ===============================================================
 
@@ -26,7 +27,6 @@ theme_set(
   theme_minimal() +
     theme(
       text = element_text(family = "serif", size = 12),
-      plot.title = element_blank(),
       axis.text = element_text(size = 12, colour = "black"),
       axis.line = element_line(linewidth = 0.5),
       axis.ticks = element_line(linewidth = 0.5),
@@ -503,6 +503,10 @@ make_mlp_workflow <- function(data) {
   recipe(precrisis3 ~ ., data = data) |>
     step_rm(iso3c, year) |>
     step_normalize(all_predictors()) |>
+    step_upsample(
+      precrisis3,
+      over_ratio = 0.5
+    ) |>
     workflow() |>
     add_model(
       mlp(
@@ -516,11 +520,11 @@ make_mlp_workflow <- function(data) {
     )
 }
 
-make_mlp_grid <- function(data, size = 10) {
+make_mlp_grid <- function(data, size = 30) {
   
   grid_space_filling(
-    hidden_units(range = c(1L, 5L)),
-    penalty(range = c(-5, 0)),
+    hidden_units(),
+    penalty(),
     size = size
   )
 }
@@ -535,7 +539,7 @@ mlp_tuned <- map2(train, folds, \(d, f) tune_model(d, f, model_type = "mlp"))
 
 best_mlp <- map(
   mlp_tuned,
-  \(x) select_best(x, metric = "roc_auc")
+  \(x) select_best(x, metric = "pr_auc")
 )
 
 best_mlp
@@ -575,15 +579,22 @@ model_auc <- bind_rows(
     model,
     .metric,
     .estimate
-  )
-
-model_auc |> 
+  ) |> 
   pivot_wider(
     names_from = "specification",
     values_from = ".estimate"
   ) |> 
-  arrange(.metric)
+  arrange(.metric) |> 
+  rename(
+    "Model" = model,
+    "Metric" = .metric,
+    "Baseline" = baseline,
+    "Broad" = broad,
+    "Full" = full
+  )
 
+
+datasummary_df(model_auc)
 
 # ROC and PR Curves =================================================================
 
@@ -645,7 +656,7 @@ create_curves <- function(curve_function) {
 roc_all <- create_curves(create_roc)
 pr_all  <- create_curves(create_pr)
 
-ggplot(
+p1 <- ggplot(
   roc_all,
   aes(
     x = 1 - specificity,
@@ -659,29 +670,42 @@ ggplot(
   coord_equal() +
   facet_wrap(~ specification) +
   labs(
+    title = "ROC Curves",
     x = "False Positive Rate",
     y = "True Positive Rate"
-  )
+  ) +
+  theme(plot.title = element_text(hjust = 0.5))
 
-ggplot(
+p2 <- ggplot(
   pr_all,
   aes(
     x = recall,
     y = precision,
     color = model,
     linetype = model
-  )
-) +
+    )
+  ) +
   geom_line(linewidth = 1) +
   coord_equal() +
   facet_wrap(~ specification) +
   labs(
+    title = "PR Curves",
     x = "Recall",
     y = "Precision"
-  )
+  ) +
+  theme(plot.title = element_text(hjust = 0.5))
 
+p1 / p2 +
+  plot_layout(
+    guides = "collect" # Eine gemeinsame Legende
+  ) &
+  theme(
+    legend.position='bottom',
+    legend.title = element_blank()
+    )
 
 # Shapley Values =============================================================
+set.seed(123)
 
 train_data <- panels_ml$full |>
   filter(year >= 1970, year <= 2006)
@@ -719,6 +743,139 @@ pred
 plot_feature_importance(shap_2007)
 
 plot_contribution(shap_2007, obs = 48)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+forecast_rf_treeshap <- function(data, best_params, forecast_years) {
+  
+  final_workflow <- make_rf_workflow(data) |>
+    finalize_workflow(best_params)
+  
+  map(
+    forecast_years,
+    function(y) {
+      
+      message("Processing year: ", y)
+      
+      # Expanding training sample
+      train_data <- data |>
+        filter(year >= 1970, year <= y - 1)
+      
+      # OOS test sample
+      test_data <- data |>
+        filter(year == y)
+      
+      # Fit RF
+      fit <- final_workflow |>
+        fit(data = train_data)
+      
+      # Extract ranger model
+      rf_model <- extract_fit_engine(fit)
+      
+      # Predictors used by the RF
+      X_train <- train_data |>
+        select(-iso3c, -year, -precrisis3)
+      
+      X_test <- test_data |>
+        select(-iso3c, -year, -precrisis3)
+      
+      # Convert ranger model to treeshap format
+      unified_rf <- ranger.unify(
+        rf_model,
+        X_train
+      )
+      
+      # Calculate TreeSHAP values
+      shap <- treeshap(
+        unified_rf,
+        X_test
+      )
+      
+      list(
+        year = y,
+        shap = shap,
+        data = test_data
+      )
+    }
+  )
+}
+
+rf_full_shap <- forecast_rf_treeshap(
+  data = panels_ml$full,
+  best_params = best_rf$full,
+  forecast_years = 2005:2022
+)
+
+shap_full <- map(
+  rf_full_shap,
+  function(x) {
+    
+    x$shap$shaps |>
+      as.data.frame() |>
+      mutate(
+        iso3c = x$data$iso3c,
+        year = x$data$year,
+        precrisis3 = x$data$precrisis3
+      )
+  }
+) |> 
+  list_rbind()
+
+shap_importance <- shap_full |>
+  select(-c(iso3c, year, precrisis3)) |>
+  summarise(
+    across(
+      everything(),
+      ~ mean(abs(.x), na.rm = TRUE)
+    )
+  ) |>
+  pivot_longer(
+    everything(),
+    names_to = "variable",
+    values_to = "mean_abs_shap"
+  ) |>
+  arrange(desc(mean_abs_shap))
+
+ggplot(
+  shap_importance,
+  aes(
+    x = reorder(variable, mean_abs_shap),
+    y = mean_abs_shap
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    x = NULL,
+    y = "Mean absolute SHAP value"
+  )
 
 # Robustness Checks ==========================================================
 
