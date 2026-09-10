@@ -8,13 +8,13 @@
 # Outputs:  data/interim/
 
 
-# 0 Load Packages ===========================================================
+# 1 Load Packages ===========================================================
 library(readxl)
 library(tidyverse)
 library(countrycode)
 library(janitor)
 
-# 1 Create functions =======================================================
+# 2 Create functions =======================================================
 
 combine_longest_series <- function(data, indicator, sources) {
   
@@ -70,9 +70,9 @@ clean_data <- function(data, indicator_col = NULL, country_col = country) {
   data
 }
 
-# 2 Read and Clean raw datasets ================================================
+# 3 Read and Clean raw datasets ================================================
 
-## 2.1 Laeven & Valencia Banking Crisis Dataset ============================
+## 3.1 Laeven & Valencia Banking Crisis Dataset ============================
 
 crises <- read_xlsx(
   path = "data/raw/SYSTEMIC_BANKING_CRISES_DATABASE_2026.xlsx",
@@ -149,7 +149,7 @@ crisis_start <- crises_merged |>
   )
 
 
-## 2.2 BIS ===================================================================
+## 3.2 BIS ===================================================================
 
 # Loans
 credit_bis <- read.csv("data/raw/WS_TC_csv_col.csv")
@@ -257,7 +257,7 @@ bis_propprices_clean <- bis_propprices |>
   select(- c(REF_AREA, Value))
   
 
-## 2.3 Eurostat ===============================================================
+## 3.3 Eurostat ===============================================================
 str_eurostat <- read_xlsx("data/raw/str_eurostat.xlsx", sheet = 2, skip = 7, na = c("", "NA", ":"))
 
 str_eurostat_clean <- str_eurostat |> 
@@ -276,9 +276,9 @@ str_eurostat_clean <- str_eurostat |>
     .keep = "none"
   )
 
-## 2.4 IMF ====================================================================
+## 3.4 IMF ====================================================================
 
-### 2.4.1 Global Debt Database (GDD) ========================================
+### 3.4.1 Global Debt Database (GDD) ========================================
 gdd <- read_csv("data/raw/GDD.csv")
 
 gdd_clean <- clean_data(gdd, indicator_col = "indicator") |> 
@@ -302,7 +302,7 @@ gdd_clean <- clean_data(gdd, indicator_col = "indicator") |>
     cgdph = na_if(cgdph, 0)
   )
 
-### 2.4.2 Africa Regional Economic Outlook (AFRREO) ===========================
+### 3.4.2 Africa Regional Economic Outlook (AFRREO) ===========================
 afrreo <- read_csv("data/raw/AFRREO.csv")
 
 afrreo_clean <- afrreo |> 
@@ -336,7 +336,7 @@ afrreo_clean <- afrreo |>
     "rgdpgrowth" = gross_domestic_product_gdp_constant_prices_percent_change
   )
 
-### 2.4.3 World Economic Outlook (WEO) ========================================
+### 3.4.3 World Economic Outlook (WEO) ========================================
 weo <- read_csv("data/raw/WEO.csv")
 
 weo_clean <- clean_data(weo, indicator_col = "indicator") |> 
@@ -351,7 +351,7 @@ weo_clean <- clean_data(weo, indicator_col = "indicator") |>
     ngdp = ngdpbil * 1000000000
   )
 
-### 2.4.4 Public Finances in Modern History (PFMH) ==============================
+### 3.4.4 Public Finances in Modern History (PFMH) ==============================
 pfmh <- read_xlsx("data/raw/PFMH.xlsx")
 
 pfmh_clean <- pfmh |> 
@@ -361,7 +361,7 @@ pfmh_clean <- pfmh |>
     "govcgdp_pfmh" = d
   )
 
-### 2.4.5 Monetary Financial Statistics (MFS) ===================================
+### 3.4.5 Monetary Financial Statistics (MFS) ===================================
 
 # Net Foreign Assets
 nfa_mfs <- read_csv("data/raw/NetAssets_IMF_MFS.csv")
@@ -432,7 +432,7 @@ sp_mfs_clean <- clean_data(sp_mfs, indicator_col = "type_of_transformation") |>
   # Choose the longest mfs share price series (period avrg. vs end-of-period)
   combine_longest_series("sp", c("sppa", "speop"))
 
-### 2.4.6 National Economic Accounts (NEA) ================================
+### 3.4.6 National Economic Accounts (NEA) ================================
 nea <- read_csv("data/raw/nea.csv")
 
 nea_clean <- clean_data(nea, indicator_col = "price_type") |> 
@@ -448,7 +448,7 @@ nea_clean <- clean_data(nea, indicator_col = "price_type") |>
     rgdpgrowth = (log(rgdp) - lag(log(rgdp))) * 100
   )
 
-## 2.5 OECD =========================================================
+## 3.5 OECD =========================================================
 
 # Share Price Indices
 sp_oecd <- read_xlsx("data/raw/sp_oecd.xlsx", skip = 5)
@@ -510,9 +510,9 @@ er_oecd_clean <- er_oecd |>
   rename("er_lc_usd" = value)
 
 
-## 2.6 World Bank ==================================================
+## 3.6 World Bank ==================================================
 
-### 2.6.1 World Development Indicators (WDI) =======================
+### 3.6.1 World Development Indicators (WDI) =======================
 wdi1 <- read_csv("data/raw/wdi1.csv", na = c("", "NA", ".."))
 wdi2 <- read_csv("data/raw/wdi2.csv", na = c("", "NA", ".."))
 
@@ -551,7 +551,7 @@ wdi2_clean <- wdi2 |>
   # Manually remove data errors (discovered after descriptive analysis)
   mutate(nfa_wdi = if_else(iso3c %in% c("NLD", "ITA") & year == 2024, NA_real_, nfa_wdi))
 
-### 2.6.2 Global Financial Development (GFD) =============================
+### 3.6.2 Global Financial Development (GFD) =============================
 gfd <- read_csv("data/raw/gfd.csv", na = c("", "NA", ".."), locale = locale(encoding = "Latin1"))
 
 gfd_clean <- gfd |> 
@@ -563,7 +563,7 @@ gfd_clean <- gfd |>
     "bmgdp" = liquid_liabilities_to_gdp_percent
   )
 
-## 2.7 Jordà-Schularick-Taylor Macrohistory Database (JST) ====================
+## 3.7 Jordà-Schularick-Taylor Macrohistory Database (JST) ====================
 jst <- read_xlsx("data/raw/JSTdatasetR6.xlsx")
 
 jst_clean <- jst |> 
@@ -573,7 +573,7 @@ jst_clean <- jst |>
     "ltr_jst" = ltrate
   )
 
-# 3 Save cleaned datasets =====================================================
+# 4 Save cleaned datasets =====================================================
 
 clean_names <- ls(pattern = "_clean$")
 
