@@ -100,14 +100,10 @@ crises <- crises |>
   ) |> 
   
   # Replace "..." in end with 2025
-  mutate(
-    end = ifelse(end == "…", "2025", end)
-  ) |> 
+  mutate(end = ifelse(end == "…", "2025", end)) |> 
   
   # Convert end to numeric
-  mutate(
-    end = as.numeric(end)
-  )
+  mutate(end = as.numeric(end))
 
 # Remove duplicates
 
@@ -347,7 +343,6 @@ weo_clean <- clean_data(weo, indicator_col = "indicator") |>
     "bcagdp" = current_account_balance_credit_less_debit_percent_of_gdp
   ) |> 
   mutate(
-    ngdpmil = ngdpbil * 1000,
     ngdp = ngdpbil * 1000000000
   )
 
@@ -442,11 +437,7 @@ nea_clean <- clean_data(nea, indicator_col = "price_type") |>
   ) |> 
   arrange(iso3c, year) |> 
   group_by(iso3c) |> 
-  mutate(
-    ngdpmil = ngdp / 1000000,
-    ngdpbil = ngdp / 1000000000,
-    rgdpgrowth = (log(rgdp) - lag(log(rgdp))) * 100
-  )
+  mutate(rgdpgrowth = (rgdp - lag(rgdp)) / lag(rgdp) * 100)
 
 ## 3.5 OECD =========================================================
 
@@ -543,8 +534,6 @@ wdi2_clean <- wdi2 |>
     "inflation" = inflation_consumer_prices_annual_percent
   ) |> 
   mutate(
-    ngdpmil = ngdp / 1000000,
-    ngdpbil = ngdp / 1000000000,
     nfa_wdi = nfa / 1000000,
     trd = trd / 1000000
   ) |> 
