@@ -486,7 +486,7 @@ pp_oecd_clean <- pp_oecd |>
 # Calculate growth
 pp_oecd_clean <- pp_oecd_clean |> 
   group_by(iso3c) |> 
-  mutate(ppgrowth = (log(pp) - lag(log(pp))) * 100)
+  mutate(ppgrowth = ((pp - lag(pp)) / lag(pp)) * 100)
 
 # Exchange Rates
 er_oecd <- read_xlsx("data/raw/er_oecd.xlsx", skip = 4)
