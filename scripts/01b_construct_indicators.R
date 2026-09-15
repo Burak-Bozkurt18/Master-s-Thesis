@@ -9,27 +9,139 @@ library(countrycode)
 
 # 1 Define Functions =======================================================
 
-combine_longest_series <- function(data, indicator, sources) {
+check_compatibility <- function(data, sources, min_overlap = 8, min_cor = 0.8) {
   
-  counts <- data |>
-    filter(year >= 1970, year <= 2025) |>
-    group_by(iso3c) |>
-    summarise(
-      across(all_of(sources), ~sum(!is.na(.))),
-      .groups = "drop"
-    ) |>
-    rowwise() |>
-    mutate(source = sources[which.max(c_across(all_of(sources)))]) |>
-    ungroup() |>
-    select(iso3c, source)
+  # Create all possible pairs from the list of sources
+  pairs <- combn(sources, 2, simplify = FALSE)
+  
+  # For every country...
+  map(unique(data$iso3c), function(country) {
+    
+    # For every source in a pair...
+    map(pairs, function(pair) {
+      
+      # Create a temporary dataframe which only contains observations from the
+      # sources of the considered pair
+      xy <- data |>
+        filter(iso3c == country) |>
+        select(year, x = all_of(pair[1]), y = all_of(pair[2])) |>
+        drop_na()
+      
+      # If the overlap of the two sources is not big enough,
+      # then there is no compatibility
+      if (nrow(xy) < min_overlap) {
+        return(tibble(
+          iso3c = country,
+          source1 = pair[1],
+          source2 = pair[2],
+          n = nrow(xy),
+          correlation = NA_real_,
+          adjustment_factor = NA_real_,
+          compatible = FALSE
+        ))
+      }
+      
+      # Compute correlation between the two sources
+      correlation <- cor(xy$x, xy$y)
+      
+      # Compute the adjustment factor
+      adjustment_factor <- median(xy$x / xy$y, na.rm = T)
+      
+      tibble(
+        iso3c = country,
+        source1 = pair[1],
+        source2 = pair[2],
+        n = nrow(xy),
+        correlation = correlation,
+        adjustment_factor = adjustment_factor,
+        compatible = correlation >= min_cor
+      )
+    }) |> 
+      list_rbind()
+  }) |> 
+    list_rbind()
+}
+
+choose_longest_source <- function(data, sources) {
   
   data |>
-    left_join(counts, by = "iso3c") |>
-    rowwise() |>
-    mutate(
-      !!indicator := get(source)
+    filter(year >= 1970, year <= 2025) |>
+    group_by(iso3c) |>
+    # Calculate the number of non-missing observations across all sources
+    summarise(
+      across(all_of(sources), ~ sum(!is.na(.))),
+      .groups = "drop"
     ) |>
-    ungroup()
+    # Check for every row (that is for every country) which source has the
+    # most observations
+    rowwise() |>
+    mutate(primary_source = sources[which.max(c_across(all_of(sources)))]) |>
+    ungroup() |>
+    select(iso3c, primary_source)
+}
+
+apply_adjustments <- function(data, adjustment_factors, sources, adjust = TRUE) {
+  
+  result <- data
+  
+  for (source in sources) {
+    
+    factors <- adjustment_factors |>
+      filter(secondary_source == source) |>
+      select(iso3c, adjustment_factor) |>
+      mutate(compatible_flag = TRUE)
+    
+    result <- result |>
+      left_join(factors, by = "iso3c") |>
+      mutate(
+        "{source}_adj" := if (adjust) {
+          .data[[source]] * adjustment_factor
+        } else {
+          if_else(!is.na(compatible_flag), .data[[source]], NA_real_)
+        }
+      ) |>
+      select(-adjustment_factor, -compatible_flag)
+  }
+  
+  result
+}
+
+combine_sources <- function(data, sources, var_name,
+                            adjust_levels = TRUE,
+                            min_overlap = 8, min_cor = 0.8) {
+  
+  primary <- choose_longest_source(data, sources)
+  compatibility <- check_compatibility(data, sources, min_overlap, min_cor)
+  
+  primary_compatibility <- primary |>
+    left_join(compatibility, by = "iso3c") |>
+    filter(source1 == primary_source | source2 == primary_source) |>
+    mutate(secondary_source = if_else(source1 == primary_source, source2, source1)) |>
+    mutate(
+      adjustment_factor = case_when(
+        source1 == primary_source ~ adjustment_factor,
+        source2 == primary_source ~ 1 / adjustment_factor
+      )
+    )
+  
+  adjustment_factors <- primary_compatibility |>
+    filter(compatible) |>
+    select(iso3c, primary_source, secondary_source, adjustment_factor)
+  
+  adjusted <- apply_adjustments(data, adjustment_factors, sources, adjust = adjust_levels)
+  
+  adj_cols <- paste0(sources, "_adj")
+  
+  adjusted |>
+    left_join(primary, by = "iso3c") |>
+    mutate(
+      value_primary = as.matrix(pick(all_of(sources)))[
+        cbind(row_number(), match(primary_source, sources))
+      ],
+      value_secondary = do.call(coalesce, as.list(pick(all_of(adj_cols)))),
+      "{var_name}" := coalesce(value_primary, value_secondary)
+    ) |>
+    select(-value_primary, -value_secondary)
 }
 
 # 2 Load Datasets ==========================================================
@@ -46,44 +158,23 @@ clean_data <- files |>
 
 ### 2.4.1 Nominal ======================================================
 
-ngdp_nea <- clean_data$nea_clean |> select(iso3c, year, ngdp, ngdpmil, ngdpbil)
-ngdp_weo <- clean_data$weo_clean |> select(iso3c, year, ngdp, ngdpmil, ngdpbil)
-ngdp_wdi <- clean_data$wdi2_clean |> select(iso3c, year, ngdp, ngdpmil, ngdpbil)
-
+ngdp_nea <- clean_data$nea_clean |> select(iso3c, year, ngdp)
+ngdp_weo <- clean_data$weo_clean |> select(iso3c, year, ngdp)
+ngdp_wdi <- clean_data$wdi2_clean |> select(iso3c, year, ngdp)
 
 # Combine datasets
 ngdp_comb <- ngdp_nea |> 
   full_join(ngdp_weo, by = c("iso3c", "year"), suffix = c("_nea", "_weo")) |> 
   full_join(ngdp_wdi, by = c("iso3c", "year")) |> 
-  rename(
-    "ngdp_wdi" = ngdp,
-    "ngdpmil_wdi" = ngdpmil,
-    "ngdpbil_wdi" = ngdpbil
-  )
+  rename("ngdp_wdi" = ngdp)
 
-# Choose the longest series per country
-ngdp <- combine_longest_series(
-  ngdp_comb,
-  "ngdp",
-  c("ngdp_nea", "ngdp_weo", "ngdp_wdi")
+
+ngdp_final <- combine_sources(
+  data = ngdp_comb,
+  sources = c("ngdp_nea", "ngdp_weo", "ngdp_wdi"),
+  var_name = "ngdp",
+  adjust_levels = TRUE
 )
-
-ngdpmil <- combine_longest_series(
-  ngdp_comb,
-  "ngdpmil",
-  c("ngdpmil_nea", "ngdpmil_weo", "ngdpmil_wdi")
-)
-
-ngdpbil <- combine_longest_series(
-  ngdp_comb,
-  "ngdpbil",
-  c("ngdpbil_nea", "ngdpbil_weo", "ngdpbil_wdi")
-)
-
-# Fill missing values with values from the other sources
-ngdp <- ngdp |> mutate(ngdp = coalesce(ngdp, ngdp_nea, ngdp_weo, ngdp_wdi))
-ngdpmil <- ngdpmil |> mutate(ngdpmil = coalesce(ngdpmil, ngdpmil_nea, ngdpmil_weo, ngdpmil_wdi))
-ngdpbil <- ngdpbil |> mutate(ngdpbil = coalesce(ngdpbil, ngdpbil_nea, ngdpbil_weo, ngdpbil_wdi))
 
 ### 2.4.2 Real Growth ==================================================
 
@@ -99,22 +190,21 @@ rgdp_comb <- rgdp_nea |>
   full_join(rgdp_afrreo, by = c("iso3c", "year")) |>
   full_join(rgdp_wdi, by = c("iso3c", "year"), suffix = c("_afrreo", "_wdi"))
 
-# Choose the longest series per country
-rgdp_comb <- combine_longest_series(
-  rgdp_comb,
-  "rgdpgrowth",
-  c("rgdpgrowth_nea", "rgdpgrowth_pfmh", "rgdpgrowth_afrreo", "rgdpgrowth_wdi")
+rgdp_final <- combine_sources(
+  data = rgdp_comb,
+  sources = c("rgdpgrowth_nea", "rgdpgrowth_pfmh", "rgdpgrowth_afrreo", "rgdpgrowth_wdi"),
+  var_name = "rgdpgrowth",
+  adjust_levels = FALSE
 )
 
-# Fill missing values with values from the other sources
-rgdp_comb <- rgdp_comb |> mutate(rgdpgrowth = coalesce(rgdpgrowth, rgdpgrowth_nea, rgdpgrowth_pfmh, rgdpgrowth_afrreo, rgdpgrowth_wdi))
-
 # Manual corrections
-rgdp_comb <- rgdp_comb |> 
+rgdp_final <- rgdp_final |> 
   # Replace implausible observation for Belarus in 2018 and 2022 by the more plausible values from WDI
   mutate(rgdpgrowth = if_else(iso3c %in% "BLR" & (year == 2018 | year == 2022), rgdpgrowth_wdi, rgdpgrowth))
 
+
 ## 2.6 Inflation Data =================================================
+
 
 inflation_wdi <- clean_data$wdi2_clean |> select(year, iso3c, inflation)
 inflation_weo <- clean_data$weo_clean |> select(year, iso3c, inflation)
@@ -126,12 +216,12 @@ infl_comb <- clean_data$bis_cpi_clean |>
   full_join(inflation_wdi, by = c("iso3c", "year")) |> 
   rename("inflation_wdi" = inflation)
 
-# Choose the longest series per country
-
-infl_comb <- combine_longest_series(infl_comb, "inflation", c("inflation_bis", "inflation_weo", "inflation_wdi"))
-
-# Fill missing values with values from the other sources
-infl_comb <- infl_comb |> mutate(inflation = coalesce(inflation, inflation_bis, inflation_weo, inflation_wdi))
+infl_final <- combine_sources(
+  data = infl_comb,
+  sources = c("inflation_bis", "inflation_weo", "inflation_wdi"),
+  var_name = "inflation",
+  adjust_levels = FALSE
+)
 
 ## 2.5 Debt Variables ===============================================
 
@@ -139,28 +229,54 @@ infl_comb <- infl_comb |> mutate(inflation = coalesce(inflation, inflation_bis, 
 
 # Total Credit to GDP ratio
 
-# Combine everything
-
 cgdppriv_gdd <- clean_data$gdd_clean |> select(iso3c, year, cgdppriv)
 cgdppriv_afrreo <- clean_data$afrreo_clean |> select(iso3c, year, cgdppriv)
 cgdppriv_wdi <- clean_data$wdi2_clean |> select(iso3c, year, cgdppriv)
+# Bank credit as complementary data
+bcgdppriv <- clean_data$wdi2_clean |> select(iso3c, year, bcgdppriv) 
+blpriv <- clean_data$credit_bis_clean |> select(iso3c, year, bloanspriv)
+
+bl <- bcgdppriv |> 
+  full_join(blpriv, by = c("iso3c", "year")) |> 
+  full_join(ngdp_final |> select(iso3c, year, ngdp), by = c("iso3c", "year")) |> 
+  mutate(
+    # Construct Bank Loans to GDP ratio
+    bcgdppriv_constr = bloanspriv / (ngdp / 1000000000) * 100
+  ) |> 
+  rename(
+    "bcgdppriv_wdi" = bcgdppriv,
+    "blpriv_bis" = bloanspriv
+  )
 
 cgdppriv_comb <- clean_data$cgdp_bis_clean |> 
   full_join(cgdppriv_gdd, by = c("iso3c", "year"), suffix = c("_bis", "_gdd")) |> 
   full_join(cgdppriv_afrreo, by = c("iso3c", "year")) |> 
-  full_join(cgdppriv_wdi, by = c("iso3c", "year"), suffix = c("_afrreo", "_wdi"))
+  full_join(cgdppriv_wdi, by = c("iso3c", "year"), suffix = c("_afrreo", "_wdi")) |> 
+  full_join(bcgdppriv, by = c("iso3c", "year")) |> 
+  full_join(blpriv, by = c("iso3c", "year")) |> 
+  # Add nominal GDP in order to construct Bank Credit-to-GDP ratio
+  full_join(ngdp_final |> select(iso3c, year, ngdp), by = c("iso3c", "year")) |> 
+  mutate(
+    # Construct Bank Loans to GDP ratio
+    bcgdppriv_constr = bloanspriv / (ngdp / 1000000000) * 100
+  ) |> 
+  rename(
+    "bcgdppriv_wdi" = bcgdppriv,
+    "blpriv_bis" = bloanspriv
+  )
 
-
-# Choose the longest series per country
-
-cgdppriv_comb <- combine_longest_series(
+cgdppriv_final <- combine_sources(
   data = cgdppriv_comb,
-  indicator = "cgdppriv",
-  sources = c("cgdppriv_bis", "cgdppriv_gdd", "cgdppriv_afrreo", "cgdppriv_wdi")
+  sources = c("cgdppriv_bis", "cgdppriv_gdd", "cgdppriv_afrreo", "cgdppriv_wdi", "bcgdppriv_constr", "bcgdppriv_wdi"),
+  var_name = "cgdppriv",
+  adjust_levels = TRUE
 )
 
-# # Fill missing values with values from the other sources
-cgdppriv_comb <- cgdppriv_comb |> mutate(cgdppriv = coalesce(cgdppriv, cgdppriv_bis, cgdppriv_gdd, cgdppriv_afrreo, cgdppriv_wdi))
+# Calculate log difference
+cgdppriv_final <- cgdppriv_final |> 
+  arrange(iso3c, year) |>
+  group_by(iso3c) |> 
+  mutate(cgdppriv_growth = (log(cgdppriv) - lag(log(cgdppriv))) * 100)
 
 # Corporate and household credit-to-GDP ratio
 cgdpprivsplit <- clean_data$gdd_clean |> select(year, iso3c, cgdpcorp, cgdph)
@@ -169,137 +285,83 @@ cgdpprivsplit <- clean_data$gdd_clean |> select(year, iso3c, cgdpcorp, cgdph)
 cgdpprivsplit <- cgdpprivsplit |> 
   mutate(cgdph = if_else(iso3c %in% "IND" & year >= 1998 & year <= 2006, NA_real_, cgdph))
 
-
-# Bank Credit
-
-bcgdppriv <- clean_data$wdi2_clean |> select(iso3c, year, bcgdppriv)
-blpriv <- clean_data$credit_bis_clean |> select(iso3c, year, bloanspriv)
-
-bl <- bcgdppriv |> 
-  full_join(blpriv, by = c("iso3c", "year")) |> 
-  full_join(ngdpbil |> select(iso3c, year, ngdpbil), by = c("iso3c", "year")) |> 
-  mutate(
-    # Construct Bank Loans to GDP ratio
-    bcgdppriv_constr = bloanspriv / ngdpbil * 100,
-    # Approximate Bank Loans
-    blpriv_approx = bcgdppriv / 100 * ngdpbil
-  ) |> 
-  rename(
-    "bcgdppriv_wdi" = bcgdppriv,
-    "blpriv_bis" = bloanspriv
-  )
-
-# Choose longest series
-
-bcgdppriv_comb <- combine_longest_series(
-  data = bl,
-  indicator = "bcgdppriv",
-  # The constructed values are better because BIS is more trustworthy than WDI
-  sources = c("bcgdppriv_constr", "bcgdppriv_wdi")
-)
-
-blpriv_comb <- combine_longest_series(
-  data = bl,
-  indicator = "blpriv",
-  # The BIS values are more plausible than the approximated values
-  sources = c("blpriv_bis", "blpriv_approx")
-)
-
-# Fill missing values with values from the other sources
-bcgdppriv_comb <- bcgdppriv_comb |> mutate(bcgdppriv = coalesce(bcgdppriv, bcgdppriv_constr, bcgdppriv_wdi))
-blpriv_comb <- blpriv_comb |> mutate(blpriv = coalesce(blpriv, blpriv_bis, blpriv_approx))
-
-
-
-# Combine total credit-to-GDP and bank credit-to-GDP
-cgdppriv_comb <- cgdppriv_comb |> 
-  select(iso3c, year, cgdppriv) |> 
-  left_join(bcgdppriv_comb |> select(iso3c, year, bcgdppriv), by = c("iso3c", "year"))
-  
-# In order to use bank credit as an estimation of total credit, estimate ratio "a"
-cgdp_ratios <- cgdppriv_comb |> 
-  filter(year >= 1970 & year <= 2025) |> 
-  group_by(iso3c) |> 
-  summarize(a = median(cgdppriv / bcgdppriv, na.rm = T))
-
-# Add ratio "a" to cgdp panel
-cgdppriv_comb <- cgdppriv_comb |> 
-  left_join(cgdp_ratios, by = c("iso3c"))
-
-# Fill missing observations in total credit-to-GDP by bank credit-to-GDP (multiplied by ratio "a")
-cgdppriv_comb <- cgdppriv_comb |> 
-  mutate(cgdppriv = coalesce(cgdppriv, bcgdppriv * a))
-
-
 # Create approximated credit column
-credit_approx <- cgdppriv_comb |> 
+credit_approx <- cgdppriv_final |> 
   select(iso3c, year, cgdppriv) |> 
   left_join(clean_data$gdd_clean |> select(iso3c, year, cgdpcorp, cgdph), by = c("iso3c", "year")) |> 
-  left_join(ngdpbil, by = c("iso3c", "year")) |> 
+  left_join(ngdp_final, by = c("iso3c", "year")) |> 
   mutate(
-    tlpriv_approx = cgdppriv / 100 * ngdpbil,
-    tlcorp_approx = cgdpcorp / 100 * ngdpbil,
-    tlh_approx = cgdph / 100 * ngdpbil,
+    tlpriv_approx = cgdppriv / 100 * (ngdp / 1000000000),
+    tlcorp_approx = cgdpcorp / 100 * (ngdp / 1000000000),
+    tlh_approx = cgdph / 100 * (ngdp / 1000000000),
     year,
     iso3c,
     .keep = "none"
   ) 
 
+
 # Combine actual credit dataset with approximated values
-credit_comb <- clean_data$credit_bis_clean |> 
-  # exclude BIS bank loans column
-  select(-bloanspriv) |> 
+credit_comb <- clean_data$credit_bis_clean |>
   full_join(credit_approx, by = c("iso3c", "year"))
 
-# Fill in missing values in tloanspriv with the approximated values
-credit_comb <- credit_comb |> 
-  mutate(
-    tlpriv = coalesce(tloanspriv, tlpriv_approx),
-    tlcorp = coalesce(tloanscorp, tlcorp_approx),
-    tlh = coalesce(tloansh, tlh_approx)
-  )
+tlpriv_final <- combine_sources(
+  data = credit_comb,
+  sources = c("tloanspriv", "tlpriv_approx", "bloanspriv"),
+  var_name = "tlpriv",
+  adjust_levels = TRUE
+)
 
+tlcorp_final <- combine_sources(
+  data = credit_comb,
+  sources = c("tloanscorp", "tlcorp_approx"),
+  var_name = "tlcorp",
+  adjust_levels = TRUE
+)
 
-# Combine total credit with bank credit
-
-credit_comb <- credit_comb |> 
-  select(iso3c, year, tlpriv, tlcorp, tlh) |> 
-  left_join(blpriv_comb |> select(iso3c, year, blpriv), by = c("iso3c", "year"))
-  
-# In order to use bank credit as an estimation of total credit, estimate ratio "a"
-credit_ratios <- credit_comb |> 
-  filter(year >= 1970 & year <= 2025) |> 
-  group_by(iso3c) |> 
-  summarize(a = median(tlpriv / blpriv, na.rm = T))
-
-# Add ratio "a" to credit panel
-credit_comb <- credit_comb |> 
-  left_join(credit_ratios, by = c("iso3c"))
-
-# Fill missing observations in total credit by bank credit (multiplied by ratio "a")
-credit_comb <- credit_comb |> 
-  mutate(tlpriv = coalesce(tlpriv, blpriv * a))
+tlh_final <- combine_sources(
+  data = credit_comb,
+  sources = c("tloansh", "tlh_approx"),
+  var_name = "tlh",
+  adjust_levels = TRUE
+)
 
 # Calculate credit growth
-credit_comb <- credit_comb |> 
+tlpriv_final <- tlpriv_final |> 
   arrange(iso3c, year) |> 
   group_by(iso3c) |> 
-  mutate(
-    tlpriv_growth = (log(tlpriv) - lag(log(tlpriv))) * 100,
-    tlcorp_growth = (log(tlcorp) - lag(log(tlcorp))) * 100,
-    tlh_growth = (log(tlh) - lag(log(tlh))) * 100
-  )
+  mutate(tlpriv_growth = (log(tlpriv) - lag(log(tlpriv))) * 100)
+
+tlcorp_final <- tlcorp_final |> 
+  arrange(iso3c, year) |> 
+  group_by(iso3c) |> 
+  mutate(tlcorp_growth = (log(tlcorp) - lag(log(tlcorp))) * 100)
+
+tlh_final <- tlh_final |> 
+  arrange(iso3c, year) |> 
+  group_by(iso3c) |> 
+  mutate(tlh_growth = (log(tlh) - lag(log(tlh))) * 100)
 
 # Calculate real credit growth
-credit_comb <- credit_comb |> 
-  left_join(infl_comb |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
+
+tlpriv_final <- tlpriv_final |> 
+  left_join(infl_final |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
   arrange(iso3c, year) |> 
   group_by(iso3c) |> 
-  mutate(
-    tlpriv_rgrowth = ((1 + tlpriv_growth/100) / (1 + inflation/100) - 1) * 100,
-    tlcorp_rgrowth = ((1 + tlcorp_growth/100) / (1 + inflation/100) - 1) * 100,
-    tlh_rgrowth = ((1 + tlh_growth/100) / (1 + inflation/100) - 1) * 100
-  ) |> 
+  mutate(tlpriv_rgrowth = ((1 + tlpriv_growth/100) / (1 + inflation/100) - 1) * 100) |> 
+  ungroup()
+
+tlcorp_final <- tlcorp_final |> 
+  left_join(infl_final |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
+  arrange(iso3c, year) |> 
+  group_by(iso3c) |> 
+  mutate(tlcorp_rgrowth = ((1 + tlcorp_growth/100) / (1 + inflation/100) - 1) * 100) |> 
+  ungroup()
+
+tlh_final <- tlh_final |> 
+  left_join(infl_final |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
+  arrange(iso3c, year) |> 
+  group_by(iso3c) |> 
+  mutate(tlh_rgrowth = ((1 + tlh_growth/100) / (1 + inflation/100) - 1) * 100) |> 
   ungroup()
 
 ### 2.5.2 Public Debt =================================================
@@ -314,16 +376,21 @@ govcgdp_comb <- govcgdp_gdd |>
   full_join(govcgdp_weo, by = c("iso3c", "year"), suffix = c("_gdd", "_weo")) |> 
   full_join(govcgdp_pfmh, by = c("iso3c", "year"))
 
-# Choose the longest series per country
-
-govcgdp_comb <- combine_longest_series(
+govcgdp_final <- combine_sources(
   data = govcgdp_comb,
-  indicator = "govcgdp",
-  sources = c("govcgdp_weo", "govcgdp_pfmh", "govcgdp_gdd", "ggovdebt_gdd")
+  sources = c("govcgdp_weo", "govcgdp_pfmh", "govcgdp_gdd", "ggovdebt_gdd"),
+  var_name = "govcgdp",
+  adjust_levels = TRUE
 )
 
-# Fill missing values with values from the other sources
-govcgdp_comb <- govcgdp_comb |> mutate(govcgdp = coalesce(govcgdp, govcgdp_weo, govcgdp_pfmh, govcgdp_gdd, ggovdebt_gdd))
+# Compute log differences
+govcgdp_final <- govcgdp_final |>
+  arrange(iso3c, year) |>
+  group_by(iso3c) |>
+  mutate(
+    govcgdp_growth = (log(govcgdp) - lag(log(govcgdp))) * 100
+  )
+  
 
 ## 2.7 Current account balance (% of GDP) =============================
 
@@ -335,16 +402,12 @@ bca_comb <- bca_wdi |>
   full_join(bca_weo, by = c("iso3c", "year")) |> 
   rename("bcagdp_weo" = bcagdp)
 
-# Choose the longest series per country
-
-bca_comb <- combine_longest_series(
+bca_final <- combine_sources(
   data = bca_comb,
-  indicator = "bcagdp",
-  sources = c("bcagdp_weo", "bcagdp_wdi")
+  sources = c("bcagdp_weo", "bcagdp_wdi"),
+  var_name = "bcagdp",
+  adjust_levels = TRUE
 )
-
-# Fill missing values with values from the other sources
-bca_comb <- bca_comb |> mutate(bcagdp = coalesce(bcagdp, bcagdp_weo, bcagdp_wdi))
 
 ## 2.8 Property Prices =======================================
 
@@ -352,15 +415,13 @@ bca_comb <- bca_comb |> mutate(bcagdp = coalesce(bcagdp, bcagdp_weo, bcagdp_wdi)
 pp_comb <- clean_data$bis_propprices_clean |> 
   full_join(clean_data$pp_oecd_clean |> select(-pp), by = c("iso3c", "year"), suffix = c("_bis", "_oecd"))
 
-# Choose longest series
-pp_comb <- combine_longest_series(
+pp_final <- combine_sources(
   data = pp_comb,
-  indicator = "ppgrowth",
-  sources = c("ppgrowth_bis", "ppgrowth_oecd")
+  sources = c("ppgrowth_bis", "ppgrowth_oecd"),
+  var_name = "ppgrowth",
+  adjust_levels = FALSE
 )
 
-# Fill missing values with values from the other sources
-pp_comb <- pp_comb |> mutate(ppgrowth = coalesce(ppgrowth, ppgrowth_bis, ppgrowth_oecd))
 
 ## 2.9 Net foreign assets ===================================================
 
@@ -372,22 +433,17 @@ nfa_comb <- full_join(
   by = c("iso3c", "year")
 )
 
-
-# Choose the longest series per country
-
-nfa_comb <- combine_longest_series(
+nfa_final <- combine_sources(
   data = nfa_comb,
-  indicator = "nfa",
-  sources = c("nfa_mfs", "nfa_wdi")
+  sources = c("nfa_mfs", "nfa_wdi"),
+  var_name = "nfa",
+  adjust_levels = TRUE
 )
 
-# Fill missing values with values from the other sources
-nfa_comb <- nfa_comb |> mutate(nfa = coalesce(nfa, nfa_mfs, nfa_wdi))
-
 # Compute NFA-to-GDP ratio
-nfa_comb <- nfa_comb |> 
-  left_join(ngdpmil |> select(year, iso3c, ngdpmil), by = c("iso3c", "year")) |> 
-  mutate(nfagdp = (nfa / ngdpmil) * 100)
+nfa_final <- nfa_final |> 
+  left_join(ngdp_final |> select(year, iso3c, ngdp), by = c("iso3c", "year")) |> 
+  mutate(nfagdp = (nfa / (ngdp / 1000000)) * 100)
 
 ## 2.10 Yield curve ===================================
 
@@ -404,90 +460,126 @@ ir_comb <- clean_data$ir_oecd_clean |>
   full_join(ltr_pfmh, by = c("iso3c", "year")) |> 
   full_join(ir_jst, by = c("iso3c", "year")) |> 
   # Inflation for approximating long term nominal interest rate
-  left_join(infl_comb |> select(iso3c, year, inflation), by = c("iso3c", "year")) |> 
-  mutate(
-    str = coalesce(str_oecd, str_mfs, str_eurostat, str_jst),
-    ltr_approx = rltir + inflation,
-    ltr = coalesce(ltr_oecd, mfs_ltr, ltr_approx, ltr_jst),
-    ycurve = ltr - str
-  )
+  left_join(infl_final |> select(iso3c, year, inflation), by = c("iso3c", "year")) |> 
+  mutate(ltr_approx = rltir + inflation)
+
+str <- combine_sources(
+  data = ir_comb,
+  sources = c("str_oecd", "str_mfs", "str_eurostat", "str_jst"),
+  var_name = "str",
+  adjust_levels = TRUE
+)
+
+ltr <- combine_sources(
+  data = ir_comb,
+  sources = c("ltr_oecd", "mfs_ltr", "ltr_approx", "ltr_jst"),
+  var_name = "ltr",
+  adjust_levels = TRUE
+)
+
+ycurve_final <- str |> 
+  full_join(ltr, by = c("iso3c", "year")) |> 
+  mutate(ycurve = ltr - str) |> 
+  select(iso3c, year, ycurve)
 
 ## 2.11 Broad Money ========================================================
 
+bmgdp_gfd <- clean_data$gfd_clean |> select(year, iso3c, bmgdp)
+bmgdp_wdi <- clean_data$wdi1_clean |> select(iso3c, year, bmgdp)
+bm_mfs <- clean_data$bmoney_mfs_clean |> rename("bm" = broad_money)
+bm_wdi <- clean_data$wdi1 |> select(iso3c, year, bm)
 
-# # Combine datasets
-# bmoney_comb <- clean_data$bmoney_mfs_clean |> 
-#   full_join(clean_data$wdi1_clean, by = c("iso3c", "year")) |>
-#   full_join(bmgdp_gfd, by = c("iso3c", "year"), suffix = c("_wdi", "_gfd")) |> 
-#   # Nominal GDP for approximating broad money
-#   left_join(ngdpmil |> select(iso3c, year, ngdpmil), by = c("iso3c", "year")) |> 
-#   # full_join(bmoney_jst, by = c("iso3c", "year")) |> 
-#   rename(
-#     "bmoney_mfs" = broad_money,
-#     "bmoney_wdi" = bm
-#     # "bmoney_jst" = money
-#   )
+bm_jst <- clean_data$jst_clean |> 
+  select(iso3c, year, money, gdp) |> 
+  mutate(bmgdp_jst = money / gdp * 100) |> 
+  select(-gdp)
 
 # Broad Money to GDP
 
-bmgdp_gfd <- clean_data$gfd_clean |> select(year, iso3c, bmgdp)
-bmgdp_wdi <- clean_data$wdi1_clean |> select(iso3c, year, bmgdp)
 bmgdp_comb <- bmgdp_gfd |> 
-  full_join(bmgdp_wdi, by = c("iso3c", "year"), suffix = c("_gfd", "_wdi"))
+  full_join(bmgdp_wdi, by = c("iso3c", "year"), suffix = c("_gfd", "_wdi")) |> 
+  full_join(bm_jst, by = c("iso3c", "year")) |> 
+  full_join(bm_mfs, by = c("iso3c", "year")) |> 
+  # Nominal GDP for constructing broad money to GDP ratio
+  left_join(ngdp_final |> select(iso3c, year, ngdp), by = c("iso3c", "year")) |> 
+  # Construct broad money to GDP ratio
+  mutate(
+    bmgdp_mfs = bm / (ngdp / 1000000) * 100
+  )
 
-# Choose the longest series per country
-bmgdp_comb <- combine_longest_series(
+bmgdp_final <- combine_sources(
   data = bmgdp_comb,
-  indicator = "bmgdp",
-  sources = c("bmgdp_wdi", "bmgdp_gfd")
+  sources = c("bmgdp_gfd", "bmgdp_mfs", "bmgdp_wdi", "bmgdp_jst"),
+  var_name = "bmgdp",
+  adjust_levels = TRUE
 )
 
-# Fill missing values with values from the other sources
-bmgdp_comb <- bmgdp_comb |> mutate(bmgdp = coalesce(bmgdp, bmgdp_wdi, bmgdp_gfd))
-
-
 # Manually correct breaks and errors
-bmgdp_comb <- bmgdp_comb |> 
+bmgdp_final <- bmgdp_final |> 
   # Replace the WDI bmgdp series by the GFD series for Sierra Leone
   mutate(bmgdp = if_else(iso3c %in% "SLE", bmgdp_gfd, bmgdp)) |> 
   # Set implausible bmgdp value for Luxembourg in 1993 to NA
   mutate(bmgdp = if_else(iso3c %in% "LUX" & year == 1993, NA_real_, bmgdp)) |> 
   # Multiply implausibly low bmgdp values for Spain from 1997 to 2000 by 10
-  mutate(bmgdp = if_else(iso3c %in% "ESP" & year >= 1997 & year <= 2000, bmgdp * 10, bmgdp))
+  mutate(bmgdp = if_else(iso3c %in% "ESP" & year >= 1997 & year <= 2000, bmgdp * 10, bmgdp)) |> 
+  # Replace implausibly low values for Zimbabwe in 2024 and 2025 by the unadjusted values from MFS
+  mutate(bmgdp = if_else(iso3c %in% "ZWE" & year >= 2024 & year <= 2025, bmgdp_mfs, bmgdp))
+
+# Compute log differences
+bmgdp_final <- bmgdp_final |>
+  arrange(iso3c, year) |>
+  group_by(iso3c) |>
+  mutate(
+    bmgdpgrowth = (log(bmgdp) - lag(log(bmgdp))) * 100
+  )
+  
 
 # Broad Money
 
-bm_mfs <- clean_data$bmoney_mfs_clean |> rename("bm" = broad_money)
-bm_wdi <- clean_data$wdi1 |> select(iso3c, year, bm)
-
 # Combine datasets
 bm_comb <- bm_mfs |> 
-  full_join(bm_wdi, by = c("iso3c", "year"), suffix = c("_mfs", "_wdi"))
+  full_join(bm_wdi, by = c("iso3c", "year"), suffix = c("_mfs", "_wdi")) |> 
+  full_join(bm_jst |> select(iso3c, year, money), by = c("iso3c", "year")) |> 
+  full_join(bmgdp_final |> select(year, iso3c, bmgdp), by = c("year", "iso3c")) |> 
+  # Add nominal GDP for approximating broad money
+  left_join(ngdp_final |> select(iso3c, year, ngdp), by = c("iso3c", "year")) |> 
+  # Approximate broad money
+  mutate(bm_approx = bmgdp / 100 * (ngdp / 1000000)) |> 
+  select(-ngdp) |> 
+  rename("bm_jst" = money)
 
-# Approximate broad money
-bm_comb <- bm_comb |> 
-  full_join(bmgdp_comb |> select(year, iso3c, bmgdp), by = c("year", "iso3c")) |> 
-  left_join(ngdpmil |> select(iso3c, year, ngdpmil), by = c("iso3c", "year")) |> 
-  mutate(bm_approx = bmgdp / 100 * ngdpmil)
-
-# Choose longest series
-bm_comb <- combine_longest_series(
+bm_final <- combine_sources(
   data = bm_comb,
-  indicator = "bm",
-  sources = c("bm_mfs", "bm_wdi", "bm_approx")
+  sources = c("bm_mfs", "bm_wdi", "bm_jst", "bm_approx"),
+  var_name = "bm",
+  adjust_levels = TRUE
 )
 
-# Fill missing values with values from the other sources
-bm_comb <- bm_comb |> mutate(bm = coalesce(bm, bm_mfs, bm_wdi, bm_approx))
-
 # Manual corrections
-bm_comb <- bm_comb |> 
+bm_final <- bm_final |> 
   # Replace implausible bmoney values for Sierra Leone by the approximation
   mutate(bm = if_else(iso3c %in% "SLE", bm_approx, bm)) |> 
   # Set broad money value for Liberia in 2024 as missing since it creates an artificial jump
   mutate(bm = if_else(iso3c %in% "LBR" & year == 2024, NA_real_, bm))
 
-# Broad Money to Total Reserves
+# Calculate broad money log difference
+bm_final <- bm_final |>
+  arrange(iso3c, year) |>
+  group_by(iso3c) |>
+  mutate(
+    bmgrowth = (log(bm) - lag(log(bm))) * 100
+  )
+
+# Deflate broad money log difference
+bm_final <- bm_final |>
+  left_join(infl_final |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
+  arrange(iso3c, year) |>
+  group_by(iso3c) |>
+  mutate(
+    bm_rgrowth = ((1 + bmgrowth/100) / (1 + inflation/100) - 1) * 100
+  )
+
+# Broad money to total reserves
 
 bmtr <- clean_data$wdi1_clean |> select(iso3c, year, bmtr) |> rename("bmtr_wdi" = bmtr)
 tr <- clean_data$wdi2_clean |> select(iso3c, year, trd)
@@ -495,7 +587,7 @@ tr <- clean_data$wdi2_clean |> select(iso3c, year, trd)
 # Compute Broad money to total reserves ratio for remaining countries (especially Euro Countries)
 bmtr_comb <- bmtr |> 
   full_join(tr, by = c("iso3c", "year")) |> 
-  full_join(bm_comb |> select(year, iso3c, bm), by = c("iso3c", "year")) |> 
+  full_join(bm_final |> select(year, iso3c, bm), by = c("iso3c", "year")) |> 
   # Exchange Rate Domestic Currency per USD
   left_join(clean_data$er_oecd_clean, by = c("iso3c", "year")) |> 
   mutate(
@@ -503,41 +595,21 @@ bmtr_comb <- bmtr |>
     tr = trd * er_lc_usd, 
     # Calculate Broad Money to total reserves ratio
     bmtr_constr = bm / tr
-    ) 
+  ) 
 
 # Choose longest series
-bmtr_comb <- combine_longest_series(
+bmtr_final <- combine_sources(
   data = bmtr_comb,
-  indicator = "bmtr",
-  sources = c("bmtr_wdi", "bmtr_constr")
+  sources = c("bmtr_wdi", "bmtr_constr"),
+  var_name = "bmtr",
+  adjust_levels = TRUE
 )
 
-# Fill missing values with values from the other sources
-bmtr_comb <- bmtr_comb |> mutate(bmtr = coalesce(bmtr, bmtr_wdi, bmtr_constr))
-
 # Manual Corrections
-bmtr_comb <- bmtr_comb |> 
+bmtr_final <- bmtr_final |> 
   mutate(
     # Divide implausibly high bmtr values for Sierra Leone by 1000 (then they become more plausible)
     bmtr = if_else(iso3c %in% "SLE" & year >= 2001 & year <= 2014, bmtr / 1000, bmtr) 
-  )
-
-# Calculate broad money growth rate
-
-bm_comb <- bm_comb |>
-  arrange(iso3c, year) |>
-  group_by(iso3c) |>
-  mutate(
-    bmgrowth = (log(bm) - lag(log(bm))) * 100
-  )
-
-# Calculate real broad money growth
-bm_comb <- bm_comb |>
-  left_join(infl_comb |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
-  arrange(iso3c, year) |>
-  group_by(iso3c) |>
-  mutate(
-    bm_rgrowth = ((1 + bmgrowth/100) / (1 + inflation/100) - 1) * 100
   )
 
 ## 2.12 Loans-to-deposit ratio ===============================================
@@ -551,22 +623,27 @@ ltd_comb <- clean_data$ltd_mfs_clean |>
   full_join(ltd_jst, by = c("iso3c", "year")) |> 
   rename("ltd_jst" = ltd)
 
-# Choose the longest series per country
-ltd_comb <- combine_longest_series(
+ltd_final <- combine_sources(
   data = ltd_comb,
-  indicator = "ltd",
-  sources = c("ltd_mfs", "ltd_gfd", "ltd_jst")
+  sources = c("ltd_mfs", "ltd_gfd", "ltd_jst"),
+  var_name = "ltd",
+  adjust_levels = TRUE
 )
 
-# Fill missing values with values from the other sources
-ltd_comb <- ltd_comb |> mutate(ltd = coalesce(ltd, ltd_mfs, ltd_gfd, ltd_jst))
+# Compute log differences
+ltd_final <- ltd_final |>
+  arrange(iso3c, year) |>
+  group_by(iso3c) |>
+  mutate(
+    ltd_growth = (log(ltd) - lag(log(ltd))) * 100
+  )
 
 ## 2.13 Share prices =========================================================
 
 # GFD
 spr_gfd <- clean_data$gfd_clean |> select(year, iso3c, spr) |> rename("spr_gfd" = spr)
 sp_mfs <- clean_data$sp_mfs_clean |> select(year, iso3c, sp)
-  
+
 # Combine datasets
 sp_comb <- clean_data$sp_oecd_clean |> 
   full_join(sp_mfs, by = c("iso3c", "year"), suffix = c("_oecd", "_mfs")) |> 
@@ -583,33 +660,28 @@ sp_comb <- sp_comb |>
   arrange(iso3c, year) |> 
   group_by(iso3c) |> 
   mutate(
-    spr_oecd = (log(sp_oecd) - lag(log(sp_oecd))) * 100,
-    spr_mfs = (log(sp_mfs) - lag(log(sp_mfs))) * 100
+    spr_oecd = (sp_oecd - lag(sp_oecd)) / lag(sp_oecd) * 100,
+    spr_mfs = (sp_mfs - lag(sp_mfs)) / lag(sp_mfs) * 100
   )
 
-# Choose the longest series
-
-sp_comb <- combine_longest_series(
+sp_final <- combine_sources(
   data = sp_comb,
-  indicator = "spr",
-  sources = c("spr_oecd", "spr_mfs", "spr_gfd")
+  sources = c("spr_oecd", "spr_mfs", "spr_gfd"),
+  var_name = "spr",
+  adjust_levels = FALSE
 )
-
-# Fill missing values with values from the other sources
-sp_comb <- sp_comb |> mutate(spr = coalesce(spr, spr_oecd, spr_mfs, spr_gfd))
 
 # Compute real stock market return
 
-sp_comb <- sp_comb |> 
-  left_join(infl_comb |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
+sp_final <- sp_final |> 
+  left_join(infl_final |> select(year, iso3c, inflation), by = c("iso3c", "year")) |> 
   arrange(iso3c, year) |> 
   group_by(iso3c) |> 
   mutate(sprr = ((1 + spr/100) / (1 + inflation/100) - 1) * 100) |> 
   ungroup()
 
 # 5 Save the constructed indicators ==========================================
-indicators <- ls(pattern = "_comb$")
-indicators <- indicators[!indicators %in% c("ngdp_comb")]
+indicators <- ls(pattern = "_final$")
 indicators <- c(indicators, "cgdpprivsplit")
 
 walk(indicators, ~ write_rds(get(.x), file.path("data/interim/indicators", paste0(.x, ".rds"))))

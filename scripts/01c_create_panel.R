@@ -32,24 +32,19 @@ panel <- panel |>
   mutate(iso3c = countrycode(country, origin = "country.name", destination = "iso3c"))
 
 panel <- panel |> 
-  left_join(crisis_years,
-            by = c("country", "year")) |> 
-  mutate(
-    crisis = replace_na(crisis, 0)
-  )
+  left_join(crisis_years, by = c("country", "year")) |> 
+  mutate(crisis = replace_na(crisis, 0))
 
 panel <- panel |> 
-  left_join(crisis_start,
-            by = c("country", "year")) |> 
-  mutate(
-    crisis_start = replace_na(crisis_start, 0)
-  )
+  left_join(crisis_start, by = c("country", "year")) |> 
+  mutate(crisis_start = replace_na(crisis_start, 0))
 
 # Pre-crisis indicator
 panel <- panel |>
   group_by(country) |>
   arrange(year) |>
   mutate(
+    precrisis1 = as.integer(lead(crisis_start, 1, default = 0)),
     precrisis2 = as.integer(
       lead(crisis_start, 1, default = 0) +
         lead(crisis_start, 2, default = 0) > 0
@@ -84,51 +79,48 @@ panel <- panel |>
 
 # 4 Add all indicators to the panel ==========================================
 
-# Nominal GDP (in units, millions and billions)
-# panel <- left_join(panel, indicators$ngdp |> select(iso3c, year, ngdp), by = c("iso3c", "year"))
-# panel <- left_join(panel, indicators$ngdpmil |> select(iso3c, year, ngdpmil), by = c("iso3c", "year"))
-# panel <- left_join(panel, indicators$ngdpbil |> select(iso3c, year, ngdpbil), by = c("iso3c", "year"))
-
 # Real GDP growth
-panel <- left_join(panel, indicators$rgdp_comb |> select(iso3c, year, rgdpgrowth), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$rgdp_final |> select(iso3c, year, rgdpgrowth), by = c("iso3c", "year"))
 
 # Inflation
-panel <- left_join(panel, indicators$infl_comb |> select(iso3c, year, inflation), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$infl_final |> select(iso3c, year, inflation), by = c("iso3c", "year"))
 
 # Total Private Credit-to-GDP ratio
-panel <- left_join(panel, indicators$cgdppriv_comb |> select(iso3c, year, cgdppriv), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$cgdppriv_final |> select(iso3c, year, cgdppriv, cgdppriv_growth), by = c("iso3c", "year"))
 
 # Corporate and household Credit-to-GDP ratio
 panel <- left_join(panel, indicators$cgdpprivsplit, by = c("iso3c", "year"))
 
-# Real Total credit growth
-panel <- left_join(panel, indicators$credit_comb |>  select(year, iso3c, ends_with("rgrowth")), by = c("iso3c", "year"))
+# Real credit growth
+panel <- left_join(panel, indicators$tlpriv_final |>  select(year, iso3c, tlpriv_rgrowth), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$tlcorp_final |>  select(year, iso3c, tlcorp_rgrowth), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$tlh_final |>  select(year, iso3c, tlh_rgrowth), by = c("iso3c", "year"))
 
 # Government Credit-to-GDP ratio
-panel <- left_join(panel, indicators$govcgdp_comb |> select(iso3c, year, govcgdp), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$govcgdp_final |> select(iso3c, year, govcgdp, govcgdp_growth), by = c("iso3c", "year"))
 
 # Current Account Balance to GDP ratio
-panel <- left_join(panel, indicators$bca_comb |> select(iso3c, year, bcagdp), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$bca_final |> select(iso3c, year, bcagdp), by = c("iso3c", "year"))
 
 # Real property price growth
-panel <- left_join(panel, indicators$pp_comb |> select(iso3c, year, ppgrowth), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$pp_final |> select(iso3c, year, ppgrowth), by = c("iso3c", "year"))
 
 # Net foreign assets to GDP
-panel <- left_join(panel, indicators$nfa_comb |> select(year, iso3c, nfagdp), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$nfa_final |> select(year, iso3c, nfagdp), by = c("iso3c", "year"))
 
 # Yield Curve
-panel <- left_join(panel, indicators$ir_comb |> select(iso3c, year, ycurve), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$ycurve_final |> select(iso3c, year, ycurve), by = c("iso3c", "year"))
 
 # Broad money to total reserves, real broad money growth and broad money to GDP
-panel <- left_join(panel, indicators$bm_comb |> select(year, iso3c, bm_rgrowth), by = c("iso3c", "year"))
-panel <- left_join(panel, indicators$bmgdp_comb |> select(year, iso3c, bmgdp), by = c("iso3c", "year"))
-panel <- left_join(panel, indicators$bmtr_comb |> select(year, iso3c, bmtr), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$bm_final |> select(year, iso3c, bm_rgrowth), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$bmgdp_final |> select(year, iso3c, bmgdp, bmgdpgrowth), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$bmtr_final |> select(year, iso3c, bmtr), by = c("iso3c", "year"))
 
 # Loans-to-Deposit ratio
-panel <- left_join(panel, indicators$ltd_comb |> select(iso3c, year, ltd), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$ltd_final |> select(iso3c, year, ltd, ltd_growth), by = c("iso3c", "year"))
 
 # Real Stock Price returns
-panel <- left_join(panel, indicators$sp_comb |> select(iso3c, year, sprr), by = c("iso3c", "year"))
+panel <- left_join(panel, indicators$sp_final |> select(iso3c, year, sprr), by = c("iso3c", "year"))
 
 # 5 Save Panel =================================================================
 write_rds(panel, "data/final/panel.rds")
@@ -139,56 +131,16 @@ message("Step 1c: Panel saved to data/interim/final")
 # Appendix =====================================================================
 
 
-# Check how many observations each country has for each indicator
-
-# check <- panel |>
-#   group_by(country) |>
-#   summarise(
-#     across(
-#       - (year:advanced),
-#       ~ sum(!is.na(.x)),
-#       .names = "n_{.col}"
-#       )
-# )
+# # Identify outliers and structural breaks
 # 
-# sort(colSums(check[,-1]), decreasing = T)
-
-
-# panel |> 
-#   select(cgdppriv, rgdpgrowth, inflation, govcgdp, bcagdp, bmgdp, ltd, nfagdp) |> 
-#   complete.cases() |> 
-#   sum()
-# 
-# predictors <- c(
-#   "cgdppriv", "rgdpgrowth", "inflation", "govcgdp", "bcagdp", "bmgdp", "ltd", "nfagdp"
-# )
-# 
-# panel_complete <- panel |> 
-#   filter(if_all(all_of(predictors), ~ !is.na(.)), Crisis != 1) 
-# 
-# panel_complete |> 
-#   summarize(
-#     n_precrisis2 = sum(PreCrisis2),
-#     n_precrisis3 = sum(PreCrisis3),
-#     n_precrisis4 = sum(PreCrisis4)
-#   )
-
-
-
-
-
-
-
-# Identify outliers and structural breaks
-
 # find_large_changes <- function(data) {
-#   
+# 
 #   vars <- data |>
 #     select(where(is.numeric), -year) |>
 #     names()
-#   
+# 
 #   map_dfr(vars, function(var) {
-#     
+# 
 #     data |>
 #       arrange(iso3c, year) |>
 #       group_by(iso3c) |>
@@ -208,9 +160,10 @@ message("Step 1c: Panel saved to data/interim/final")
 # }
 # large_changes <- find_large_changes(panel)
 # 
-# large_changes |> 
-#   filter(!(variable %in% c("crisis", "crisis_start", "precrisis2", "precrisis3", "precrisis4", "advanced", "ngdpmil", "ngdpbil", "inflation"))) |> 
+# large_changes |>
+#   filter(!(variable %in% c("crisis", "crisis_start", "precrisis1", "precrisis2", 
+#                            "precrisis3", "precrisis4", "advanced", "inflation"))) |>
 #   View()
 # 
-# panel |> filter(iso3c %in% c("MKD", "MNG", "TUR", "JAM", "ISL", "BGD", "UKR")) |> ggplot(aes(x = year, y = sprr, col = iso3c)) + geom_line( linewidth = 1)
+# panel |> filter(iso3c %in% c("STP", "ZMB", "LBN", "LBR")) |> ggplot(aes(x = year, y = govcgdp, col = iso3c)) + geom_line( linewidth = 1)
 # 
