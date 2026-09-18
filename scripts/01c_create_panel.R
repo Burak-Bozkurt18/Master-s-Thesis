@@ -64,6 +64,10 @@ panel <- panel |>
   ungroup() |> 
   arrange(country)
 
+# Add World Bank Region
+panel <- panel |> 
+  left_join(codelist |> select(iso3c, region), by = c("iso3c"))
+
 # Categorize countries in Advanced Economies and Emerging/Developing Economies
 advanced <- c(
   "AUS", "AUT", "BEL", "CAN", "CHE", "CYP", "CZE",
