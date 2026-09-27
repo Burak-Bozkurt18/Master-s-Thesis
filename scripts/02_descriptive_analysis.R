@@ -31,7 +31,7 @@ par(family = "serif")
 # 4 Descriptive Analysis =====================================================
 
 panel |> 
-  ggplot(aes(x = year, y = crisis, fill = factor(advanced))) +
+  ggplot(aes(x = year, y = crisis_start, fill = factor(advanced))) +
   geom_col() + 
   theme(
     legend.position = "bottom",
@@ -39,7 +39,22 @@ panel |>
     axis.title.x = element_blank()
   ) +
   scale_fill_manual(labels = c("Emerging and Developing Economies", "Advanced Economies"), values = c("#F8766D", "#00BFC4")) +
-  labs(y = "Number of Crises")
+  labs(y = "Number of Crisis Starts") +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0))
+
+panel |> 
+  ggplot(aes(x = year, y = crisis_start, fill = factor(region))) +
+  geom_col() + 
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    axis.title.x = element_blank()
+  ) +
+  labs(y = "Number of Crisis Starts") +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_fill_brewer(palette = "Set2")
 
 datasummary(~  N * advanced * precrisis3,
             data = panel |> mutate(advanced = factor(advanced), precrisis3 = factor(precrisis3)))
