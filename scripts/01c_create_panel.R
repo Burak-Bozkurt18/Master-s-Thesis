@@ -44,24 +44,43 @@ panel <- panel |>
   group_by(country) |>
   arrange(year) |>
   mutate(
-    precrisis1 = as.integer(lead(crisis_start, 1, default = 0)),
-    precrisis2 = as.integer(
-      lead(crisis_start, 1, default = 0) +
-        lead(crisis_start, 2, default = 0) > 0
+    precrisis1 = if_else(
+      year + 1 <= 2025,
+      as.integer(lead(crisis_start, 1)),
+      NA_integer_
     ),
-    precrisis3 = as.integer(
-      lead(crisis_start, 1, default = 0) +
-        lead(crisis_start, 2, default = 0) +
-        lead(crisis_start, 3, default = 0) > 0
+    
+    precrisis2 = if_else(
+      year + 2 <= 2025,
+      as.integer(
+        lead(crisis_start, 1) +
+          lead(crisis_start, 2) > 0
+      ),
+      NA_integer_
     ),
-    precrisis4 = as.integer(
-      lead(crisis_start, 1, default = 0) +
-        lead(crisis_start, 2, default = 0) +
-        lead(crisis_start, 3, default = 0) + 
-        lead(crisis_start, 4, default = 0) > 0
+    
+    precrisis3 = if_else(
+      year + 3 <= 2025,
+      as.integer(
+        lead(crisis_start, 1) +
+          lead(crisis_start, 2) +
+          lead(crisis_start, 3) > 0
+      ),
+      NA_integer_
+    ),
+    
+    precrisis4 = if_else(
+      year + 4 <= 2025,
+      as.integer(
+        lead(crisis_start, 1) +
+          lead(crisis_start, 2) +
+          lead(crisis_start, 3) +
+          lead(crisis_start, 4) > 0
+      ),
+      NA_integer_
     )
   ) |>
-  ungroup() |> 
+  ungroup() |>
   arrange(country)
 
 # Add World Bank Region
