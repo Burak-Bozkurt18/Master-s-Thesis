@@ -8,6 +8,7 @@
 library(tidyverse)
 library(tidymodels)
 library(modelsummary)
+library(kableExtra)
 library(pROC)
 library(foreach)
 library(doParallel)
@@ -67,6 +68,89 @@ specs <- list(
 outcomes <- c("precrisis1", "precrisis2", "precrisis3", "precrisis4")
 
 
+# Describe Samples
+
+create_sample_summary <- function(data, variables, outcome) {
+  
+  sample <- data |>
+    select(iso3c, year, advanced, all_of(outcome), all_of(variables)) |>
+    drop_na()
+  
+  sample |>
+    summarise(
+      observations = n(),
+      precrisisK = sum(.data[[outcome]] == 1),
+      countries = n_distinct(iso3c),
+      advanced_share = (mean(as.integer(advanced)) - 1) * 100,
+      training_obs = sum(year <= 2004),
+      testing_obs = sum(year >= 2005 & year <= 2024),
+      testing_share = testing_obs / (training_obs + testing_obs) * 100
+    )
+}
+
+summary_table <- map_dfr(
+  names(specs),
+  \(spec) {
+    
+    map_dfr(
+      outcomes,
+      \(outcome) {
+        
+        create_sample_summary(
+          data = panel_logit,
+          variables = specs[[spec]],
+          outcome = outcome
+        ) |>
+          mutate(
+            specification = spec,
+            outcome = outcome,
+            .before = 1
+          )
+      }
+    )
+  }
+)
+
+tab_df <- summary_table |>
+  mutate(
+    specification = factor(specification, levels = names(specs)),
+    Outcome = str_replace(outcome, "precrisis", "K = ")
+  ) |>
+  arrange(specification, outcome)
+
+# Panel headers: one per specification, with its row count
+panel_index <- tab_df |>
+  count(specification) |>
+  mutate(label = str_to_title(as.character(specification))) %>%
+  { setNames(.$n, .$label) }
+
+tab_fmt <- tab_df |>
+  transmute(
+    Outcome,
+    `Obs.`           = prettyNum(observations, big.mark = ","),
+    `PreCrisis obs.` = prettyNum(precrisisK,   big.mark = ","),
+    Countries        = as.character(countries),
+    `Advanced (\\%)` = formatC(advanced_share, format = "f", digits = 1),
+    Training         = prettyNum(training_obs, big.mark = ","),
+    Testing          = prettyNum(testing_obs,  big.mark = ","),
+    `Testing (\\%)`  = formatC(testing_share,  format = "f", digits = 1)
+  )
+
+tab_fmt |>
+  kbl(
+    format  = "latex",
+    booktabs = TRUE,
+    align   = "lrrrrrrr",
+    escape  = FALSE,       # needed for the \\% in the column names
+    linesep = "",          # no automatic spacing every 5 rows
+    caption = "Sample composition by model specification and crisis horizon",
+    label   = "sample_summary"   # becomes \label{tab:sample_summary}
+  ) |>
+  pack_rows(index = panel_index, bold = TRUE, italic = FALSE,
+            latex_gap_space = "0.4em") |>
+  add_header_above(c(" " = 1, "Full sample" = 4, "Train/test split" = 3)) |>
+  kable_styling(latex_options = "hold_position", position = "center")
+
 
 # 5 Estimate Logit Models =====================================================
 
@@ -87,30 +171,16 @@ gof_custom <- function(model) {
   # Number of countries
   n_countries <- length(countries)
   
-  # Number of crisis observations for these countries
-  n_crises <- panel |>
-    filter(
-      iso3c %in% countries,
-      crisis_start == 1
-    ) |>
-    nrow()
-  
   # Predicted probabilities
   p <- predict(model, type = "response")
   
   # Actual outcome
   y <- model.response(mf)
   
-  # AUC
-  auc_value <- as.numeric(pROC::auc(y, p))
-  
   # McFadden R²
   ll_model <- as.numeric(logLik(model))
   
-  null_model <- glm(
-    y ~ 1,
-    family = binomial()
-  )
+  null_model <- glm(y ~ 1, family = binomial())
   
   ll_null <- as.numeric(logLik(null_model))
   
@@ -118,8 +188,6 @@ gof_custom <- function(model) {
   
   data.frame(
     `Num. Countries` = n_countries,
-    `Num. Crises` = n_crises,
-    `AUC` = round(auc_value, 3),
     `McFadden R²` = round(mcfadden_r2, 3)
   )
 }
@@ -142,22 +210,24 @@ modelsummary(
   models_all[c("precrisis1", "precrisis2")],
   title = "Early-warning logits, 1-2 year horizons",
   gof_function = gof_custom,
-  gof_omit = "RMSE|Log.Lik.|Std.Errors|AUC",
+  gof_omit = "RMSE|Log.Lik.|Std.Errors|AIC",
   coef_omit = "(Intercept)",
   stars = TRUE,
   vcov = ~iso3c,
-  shape = "cbind"
+  shape = "cbind",
+  output = "latex"
 )
 
 modelsummary(
   models_all[c("precrisis3", "precrisis4")],
   title = "Early-warning logits, 3-4 year horizons",
   gof_function = gof_custom,
-  gof_omit = "RMSE|Log.Lik.|Std.Errors|AUC",
+  gof_omit = "RMSE|Log.Lik.|Std.Errors|AIC",
   coef_omit = "(Intercept)",
   stars = TRUE,
   vcov = ~iso3c,
-  shape = "cbind"
+  shape = "cbind",
+  output = "latex"
 )
 
 ## 5.2 Out-of-sample ==========================================================
@@ -603,10 +673,193 @@ model_auc <- bind_rows(
   ) |> 
   arrange(.metric)
 
-model_auc |> 
-  filter(.metric == "pr_auc", outcome == "precrisis1")
+model_auc |>
+  pivot_wider(
+    names_from  = .metric,
+    values_from = c(Logit, RF, SVM, MLP),
+    names_glue  = "{.metric}_{.value}"
+  ) |>
+  select(outcome, specification,
+         starts_with("pr_auc"), starts_with("roc_auc")) |>
+  select(outcome, specification,
+         pr_auc_Logit, pr_auc_RF, pr_auc_SVM, pr_auc_MLP,
+         roc_auc_Logit, roc_auc_RF, roc_auc_SVM, roc_auc_MLP) |>
+  kbl(format = "latex", 
+      booktabs = TRUE, 
+      digits = 2, 
+      linesep = "",
+      align = "llcccccccc",
+      col.names = c("Outcome", "Specification", rep(c("Logit","RF","SVM","MLP"), 2)),
+      caption = "Out-of-sample performance by outcome, specification and model") |>
+  add_header_above(c(" " = 2, "PR-AUC" = 4, "ROC-AUC" = 4)) |>
+  collapse_rows(columns = 1, latex_hline = "major", valign = "top")
 
-datasummary_df(model_auc)
+datasummary_df(model_auc, output = "latex")
+
+
+
+
+
+# Evaluation with cluster Bootstrap ===========================================
+
+# Cluster bootstrap for AUC inference (resamples whole countries, not rows)
+
+cluster_bootstrap_auc <- function(results, outcome, cluster_var = "iso3c",
+                                  metric = c("roc_auc", "pr_auc"),
+                                  null_value = NULL,
+                                  n_boot = 1000, seed = 123) {
+  
+  metric <- match.arg(metric)
+  results <- results |> filter(!is.na(.data[[outcome]]), !is.na(.pred_1))
+  
+  auc_fn <- function(df) {
+    tryCatch({
+      if (metric == "roc_auc") {
+        as.numeric(pROC::auc(df[[outcome]], df$.pred_1, levels = c("0","1"), direction = "<"))
+      } else {
+        yardstick::pr_auc_vec(truth = df[[outcome]], estimate = df$.pred_1, event_level = "second")
+      }
+    }, error = function(e) NA_real_)
+  }
+  
+  observed <- auc_fn(results)
+  
+  # Default null: 0.5 for ROC-AUC, prevalence for PR-AUC
+  if (is.null(null_value)) {
+    null_value <- if (metric == "roc_auc") 0.5 else {
+      mean(as.numeric(as.character(results[[outcome]])), na.rm = TRUE)
+    }
+  }
+  
+  set.seed(seed)
+  countries <- unique(results[[cluster_var]])
+  n_countries <- length(countries)
+  by_country <- split(results, results[[cluster_var]])
+  
+  boot_values <- map_dbl(seq_len(n_boot), function(i) {
+    sampled <- sample(countries, n_countries, replace = TRUE)
+    auc_fn(list_rbind(by_country[sampled]))
+  })
+  boot_values <- boot_values[!is.na(boot_values)]
+  
+  # One-sample bootstrap p-value: shift the distribution to be centered
+  # under the null, then see how extreme the observed value is relative to it
+  centered <- boot_values - mean(boot_values) + null_value
+  p_value <- mean(abs(centered - null_value) >= abs(observed - null_value))
+  
+  tibble(
+    metric       = metric,
+    estimate     = observed,
+    std.error    = sd(boot_values),
+    null_value   = null_value,
+    ci_lower     = quantile(boot_values, 0.025, names = FALSE),
+    ci_upper     = quantile(boot_values, 0.975, names = FALSE),
+    p.value      = p_value,
+    n_valid_boot = length(boot_values)
+  )
+}
+
+
+# Gather all OOS predictions into one long structure, keyed by model/outcome/spec
+all_oos_results <- bind_rows(
+  logit_oos_results |> select(outcome, specification, preds) |> mutate(model = "Logit"),
+  map(outcomes, \(o) tibble(outcome = o, specification = names(rf_oos_results_all[[o]]),
+                            preds = rf_oos_results_all[[o]])) |> list_rbind() |> mutate(model = "RF"),
+  map(outcomes, \(o) tibble(outcome = o, specification = names(svm_oos_results_all[[o]]),
+                            preds = svm_oos_results_all[[o]])) |> list_rbind() |> mutate(model = "SVM"),
+  map(outcomes, \(o) tibble(outcome = o, specification = names(mlp_oos_results_all[[o]]),
+                            preds = mlp_oos_results_all[[o]])) |> list_rbind() |> mutate(model = "MLP")
+)
+
+set.seed(123)
+
+vs_random <- all_oos_results |>
+  mutate(
+    roc = map2(preds, outcome, \(p, o) cluster_bootstrap_auc(p, o, metric = "roc_auc", n_boot = 1000)),
+    pr  = map2(preds, outcome, \(p, o) cluster_bootstrap_auc(p, o, metric = "pr_auc",  n_boot = 1000))
+  ) |>
+  select(model, outcome, specification, roc, pr) |>
+  pivot_longer(c(roc, pr), names_to = "which", values_to = "result") |>
+  unnest(result) |>
+  select(model, outcome, specification, metric, estimate, std.error, p.value)
+
+
+build_modelsummary_vs_random <- function(vs_random, metric_choice) {
+  vs_random |>
+    filter(metric == metric_choice) |>
+    mutate(
+      group = outcome,                      # becomes the spanning row label
+      term  = str_to_title(specification)   # becomes the within-group row label
+    ) |>
+    select(model, group, term, estimate, std.error, p.value) |>
+    split(~model) |>
+    map(\(df) select(df, group, term, estimate, std.error, p.value)) |>
+    map(as_modelsummary_model)
+}
+
+
+# Wrap a tidy data.frame as a modelsummary-recognized "model"
+as_modelsummary_model <- function(tidy_df, n_obs = NA) {
+  mod <- list(
+    tidy   = tidy_df,
+    glance = data.frame(nobs = n_obs)
+  )
+  class(mod) <- "modelsummary_list"
+  mod
+}
+
+
+models_roc_random <- build_modelsummary_vs_random(vs_random, "roc_auc")[c("Logit", "RF", "SVM", "MLP")]
+models_pr_random  <- build_modelsummary_vs_random(vs_random, "pr_auc")[c("Logit", "RF", "SVM", "MLP")]
+
+modelsummary(
+  models_roc_random,
+  title = "Out-of-sample ROC-AUC vs. random benchmark (AUC = 0.5)",
+  shape = group + term ~ model,
+  stars = TRUE,
+  gof_omit = ".*",
+  notes = list(
+    "Standard errors (cluster bootstrap over countries, 1000 replicates) in parentheses.",
+    "Stars denote significance of the cluster-bootstrap test against AUC = 0.5."
+  ),
+  output = "latex"
+)
+
+modelsummary(
+  models_pr_random,
+  title = "Out-of-sample PR-AUC vs. prevalence benchmark",
+  shape = group + term ~ model,
+  stars = TRUE,
+  gof_omit = ".*",
+  notes = list(
+    "Standard errors (cluster bootstrap over countries, 1000 replicates) in parentheses.",
+    "Null for PR-AUC is each outcome's prevalence, not a fixed constant across outcomes.",
+    "Stars denote significance of the cluster-bootstrap test against that prevalence."
+  ),
+  output = "latex"
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # ROC and PR Curves =================================================================
 
@@ -1022,10 +1275,211 @@ datasummary_df(rob2_model_auc)
 
 
 
+# Robchecks with bootstrap ==================================================
 
-# tlpriv_rgrowth and bm_rgrowth
-# Regions instead of Advanced indicator
+# Normalize either pipeline's OOS output into one long tibble:
+# columns = model, outcome, specification, preds
+normalize_oos <- function(pipeline_result, model_name, is_logit = FALSE) {
+  
+  if (is_logit) {
+    pipeline_result$oos |>
+      select(outcome, specification, preds) |>
+      mutate(model = model_name)
+  } else {
+    map(names(pipeline_result$oos), \(o) {
+      spec_list <- pipeline_result$oos[[o]]
+      tibble(
+        outcome       = o,
+        specification = names(spec_list),
+        preds         = spec_list
+      )
+    }) |>
+      list_rbind() |>
+      mutate(model = model_name)
+  }
+}
 
+
+# Build the vs-random bootstrap table for one robustness check,
+# given its logit + rf + svm + mlp pipeline results.
+# year_filter: optional max year to restrict predictions to (for RC4)
+build_vs_random_check <- function(logit_result, rf_result, svm_result, mlp_result,
+                                  check_label, year_filter = NULL, n_boot = 1000) {
+  
+  all_results <- bind_rows(
+    normalize_oos(logit_result, "Logit", is_logit = TRUE),
+    normalize_oos(rf_result,  "RF"),
+    normalize_oos(svm_result, "SVM"),
+    normalize_oos(mlp_result, "MLP")
+  )
+  
+  if (!is.null(year_filter)) {
+    all_results <- all_results |>
+      mutate(preds = map(preds, \(df) filter(df, year <= year_filter)))
+  }
+  
+  set.seed(123)
+  
+  all_results |>
+    mutate(
+      roc = map2(preds, outcome, \(p, o) cluster_bootstrap_auc(p, o, metric = "roc_auc", n_boot = n_boot)),
+      pr  = map2(preds, outcome, \(p, o) cluster_bootstrap_auc(p, o, metric = "pr_auc",  n_boot = n_boot))
+    ) |>
+    select(model, outcome, specification, roc, pr) |>
+    pivot_longer(c(roc, pr), names_to = "which", values_to = "result") |>
+    unnest(result) |>
+    select(model, outcome, specification, metric, estimate, std.error, p.value) |>
+    mutate(check = check_label)
+}
+
+vs_random_rc1 <- build_vs_random_check(logit_rc1, rf_rc1, svm_rc1, mlp_rc1, "RC1: reduced sample")
+vs_random_rc2 <- build_vs_random_check(logit_rc2, rf_rc2, svm_rc2, mlp_rc2, "RC2: real growth vars")
+vs_random_rc3 <- build_vs_random_check(logit_rc3, rf_rc3, svm_rc3, mlp_rc3, "RC3: region")
+
+# Build "pipeline-shaped" wrappers around your main-analysis results so
+# normalize_oos() can consume them the same way as RC1-3
+main_logit_as_pipeline <- list(oos = logit_oos_results)
+main_rf_as_pipeline    <- list(oos = rf_oos_results_all)
+main_svm_as_pipeline   <- list(oos = svm_oos_results_all)
+main_mlp_as_pipeline   <- list(oos = mlp_oos_results_all)
+
+vs_random_rc4 <- build_vs_random_check(
+  main_logit_as_pipeline, main_rf_as_pipeline, main_svm_as_pipeline, main_mlp_as_pipeline,
+  check_label = "RC4: excluding COVID years",
+  year_filter = 2019
+)
+
+vs_random_all_rc <- bind_rows(vs_random_rc1, vs_random_rc2, vs_random_rc3, vs_random_rc4)
+
+build_modelsummary_rc <- function(vs_random_all_rc, check_label, metric_choice) {
+  vs_random_all_rc |>
+    filter(check == check_label, metric == metric_choice) |>
+    mutate(group = outcome, term = str_to_title(specification)) |>
+    select(model, group, term, estimate, std.error, p.value) |>
+    split(~model) |>
+    map(\(df) select(df, group, term, estimate, std.error, p.value)) |>
+    map(as_modelsummary_model)
+}
+
+
+
+rc_labels <- c("RC1: reduced sample", "RC2: real growth vars", "RC3: region", "RC4: excluding COVID years")
+
+rc_tables_roc <- map(rc_labels, \(lbl) {
+  build_modelsummary_rc(vs_random_all_rc, lbl, "roc_auc")[c("Logit","RF","SVM","MLP")]
+}) |> setNames(rc_labels)
+
+rc_tables_pr <- map(rc_labels, \(lbl) {
+  build_modelsummary_rc(vs_random_all_rc, lbl, "pr_auc")[c("Logit","RF","SVM","MLP")]
+}) |> setNames(rc_labels)
+
+modelsummary(
+  rc_tables_roc[["RC1: reduced sample"]],
+  title = "RC1 (reduced sample): ROC-AUC vs. random benchmark (AUC = 0.5)",
+  shape = group + term ~ model,
+  stars = TRUE,
+  gof_omit = ".*",
+  notes = list(
+    "Standard errors (cluster bootstrap over countries, 1000 replicates) in parentheses. 
+    Stars denote significance of the cluster-bootstrap test against AUC = 0.5."
+  ),
+  output = "latex"
+)
+
+modelsummary(
+  rc_tables_pr[["RC1: reduced sample"]],
+  title = "RC1 (reduced sample): PR-AUC vs. prevalence benchmark",
+  shape = group + term ~ model,
+  stars = TRUE,
+  gof_omit = ".*",
+  notes = list(
+    "Standard errors (cluster bootstrap over countries, 1000 replicates) in parentheses.
+    Null for PR-AUC is each outcome's prevalence, not a fixed constant across outcomes.
+    Stars denote significance of the cluster-bootstrap test against that prevalence."
+  ),
+  output = "latex"
+)
+
+modelsummary(
+  rc_tables_roc[["RC2: real growth vars"]],
+  title = "RC2 (real growth variables): ROC-AUC vs. random benchmark (AUC = 0.5)",
+  shape = group + term ~ model,
+  stars = TRUE,
+  gof_omit = ".*",
+  notes = list(
+    "Standard errors (cluster bootstrap over countries, 1000 replicates) in parentheses.
+    Stars denote significance of the cluster-bootstrap test against AUC = 0.5."
+  ),
+  output = "latex"
+)
+
+modelsummary(
+  rc_tables_pr[["RC2: real growth vars"]],
+  title = "RC2 (real growth variables): PR-AUC vs. prevalence benchmark",
+  shape = group + term ~ model,
+  stars = TRUE,
+  gof_omit = ".*",
+  notes = list(
+    "Standard errors (cluster bootstrap over countries, 1000 replicates) in parentheses.
+    Null for PR-AUC is each outcome's prevalence, not a fixed constant across outcomes.
+    Stars denote significance of the cluster-bootstrap test against that prevalence."
+  ),
+  output = "latex"
+)
+
+modelsummary(
+  rc_tables_roc[["RC3: region"]],
+  title = "RC3 (region): ROC-AUC vs. random benchmark (AUC = 0.5)",
+  shape = group + term ~ model,
+  stars = TRUE,
+  gof_omit = ".*",
+  notes = list(
+    "Standard errors (cluster bootstrap over countries, 1000 replicates) in parentheses.
+    Stars denote significance of the cluster-bootstrap test against AUC = 0.5."
+  ),
+  output = "latex"
+)
+
+modelsummary(
+  rc_tables_pr[["RC3: region"]],
+  title = "RC3 (region): PR-AUC vs. prevalence benchmark",
+  shape = group + term ~ model,
+  stars = TRUE,
+  gof_omit = ".*",
+  notes = list(
+    "Standard errors (cluster bootstrap over countries, 1000 replicates) in parentheses.
+    Null for PR-AUC is each outcome's prevalence, not a fixed constant across outcomes.
+    Stars denote significance of the cluster-bootstrap test against that prevalence."
+  ),
+  output = "latex"
+)
+
+modelsummary(
+  rc_tables_roc[["RC4: excluding COVID years"]],
+  title = "RC4 (excluding COVID years): ROC-AUC vs. random benchmark (AUC = 0.5)",
+  shape = group + term ~ model,
+  stars = TRUE,
+  gof_omit = ".*",
+  notes = list(
+    "Standard errors (cluster bootstrap over countries, 1000 replicates) in parentheses.
+    Stars denote significance of the cluster-bootstrap test against AUC = 0.5."
+  ),
+  output = "latex"
+)
+
+modelsummary(
+  rc_tables_pr[["RC4: excluding COVID years"]],
+  title = "RC4 (excluding COVID years): PR-AUC vs. prevalence benchmark",
+  shape = group + term ~ model,
+  stars = TRUE,
+  gof_omit = ".*",
+  notes = list(
+    "Standard errors (cluster bootstrap over countries, 1000 replicates) in parentheses.
+    Null for PR-AUC is each outcome's prevalence, not a fixed constant across outcomes.
+    Stars denote significance of the cluster-bootstrap test against that prevalence."
+  ),
+  output = "latex"
+)
 
 stopCluster(cl)
 
