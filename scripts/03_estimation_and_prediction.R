@@ -13,9 +13,9 @@ library(pROC)
 library(foreach)
 library(doParallel)
 # library(kernelshap)
-library(shapviz)
+# library(shapviz)
 library(themis)
-library(treeshap)
+# library(treeshap)
 library(patchwork)
 
 # 2 Load Panel ===============================================================
@@ -67,45 +67,68 @@ specs <- list(
 
 outcomes <- c("precrisis1", "precrisis2", "precrisis3", "precrisis4")
 
+# Horizon / embargo helpers
+last_known_crisis_year <- 2025
+horizon_of <- function(outcome) as.integer(sub("precrisis", "", outcome))
+max_test_year <- function(outcome) last_known_crisis_year - horizon_of(outcome)
 
-# Describe Samples
+first_test_year <- 2005
+first_year      <- 1970
+
+# Format a vector of years as "1970--2003" (en dash in LaTeX), "2004" or "--"
+fmt_range <- function(x) {
+  if (length(x) == 0) return("--")
+  r <- range(x)
+  if (r[1] == r[2]) as.character(r[1]) else paste0(r[1], "--", r[2])
+}
 
 create_sample_summary <- function(data, variables, outcome) {
   
+  h         <- horizon_of(outcome)
+  train_end <- first_test_year - 1 - h      # last training year for the first forecast
+  test_end  <- max_test_year(outcome)
+  
   sample <- data |>
     select(iso3c, year, advanced, all_of(outcome), all_of(variables)) |>
-    drop_na()
+    drop_na() |>
+    mutate(y = .data[[outcome]] == 1)
   
-  sample |>
-    summarise(
-      observations = n(),
-      precrisisK = sum(.data[[outcome]] == 1),
-      countries = n_distinct(iso3c),
-      advanced_share = (mean(as.integer(advanced)) - 1) * 100,
-      training_obs = sum(year <= 2004),
-      testing_obs = sum(year >= 2005 & year <= 2024),
-      testing_share = testing_obs / (training_obs + testing_obs) * 100
-    )
+  train    <- sample |> filter(year >= first_year, year <= train_end)
+  embargo  <- sample |> filter(year > train_end, year < first_test_year)
+  test     <- sample |> filter(year >= first_test_year, year <= test_end)
+  
+  # Sanity check: the three groups should cover the full sample
+  if (nrow(train) + nrow(embargo) + nrow(test) != nrow(sample)) {
+    warning("Train + embargo + test != full sample for ", outcome)
+  }
+  
+  tibble(
+    observations   = nrow(sample),
+    precrisisK     = sum(sample$y),
+    countries      = n_distinct(sample$iso3c),
+    advanced_share = (mean(as.integer(sample$advanced)) - 1) * 100,
+    train_years    = fmt_range(train$year),
+    training_obs   = nrow(train),
+    training_share = mean(train$y) * 100,
+    embargo_obs    = nrow(embargo),
+    test_years     = fmt_range(test$year),
+    testing_obs    = nrow(test),
+    testing_share  = mean(test$y) * 100
+  )
 }
 
 summary_table <- map_dfr(
   names(specs),
   \(spec) {
-    
     map_dfr(
       outcomes,
       \(outcome) {
-        
         create_sample_summary(
-          data = panel_logit,
+          data      = panel_logit,
           variables = specs[[spec]],
-          outcome = outcome
+          outcome   = outcome
         ) |>
-          mutate(
-            specification = spec,
-            outcome = outcome,
-            .before = 1
-          )
+          mutate(specification = spec, outcome = outcome, .before = 1)
       }
     )
   }
@@ -118,7 +141,6 @@ tab_df <- summary_table |>
   ) |>
   arrange(specification, outcome)
 
-# Panel headers: one per specification, with its row count
 panel_index <- tab_df |>
   count(specification) |>
   mutate(label = str_to_title(as.character(specification))) %>%
@@ -127,29 +149,40 @@ panel_index <- tab_df |>
 tab_fmt <- tab_df |>
   transmute(
     Outcome,
-    `Obs.`           = prettyNum(observations, big.mark = ","),
-    `PreCrisis obs.` = prettyNum(precrisisK,   big.mark = ","),
-    Countries        = as.character(countries),
-    `Advanced (\\%)` = formatC(advanced_share, format = "f", digits = 1),
-    Training         = prettyNum(training_obs, big.mark = ","),
-    Testing          = prettyNum(testing_obs,  big.mark = ","),
-    `Testing (\\%)`  = formatC(testing_share,  format = "f", digits = 1)
+    obs        = prettyNum(observations, big.mark = ","),
+    pre_obs    = prettyNum(precrisisK,   big.mark = ","),
+    countries  = as.character(countries),
+    advanced   = formatC(advanced_share, format = "f", digits = 1),
+    train_yrs  = train_years,
+    train_obs  = prettyNum(training_obs, big.mark = ","),
+    train_pre  = formatC(training_share, format = "f", digits = 1),
+    emb_obs    = prettyNum(embargo_obs,  big.mark = ","),
+    test_yrs   = test_years,
+    test_obs   = prettyNum(testing_obs,  big.mark = ","),
+    test_pre   = formatC(testing_share,  format = "f", digits = 1)
   )
 
 tab_fmt |>
   kbl(
-    format  = "latex",
-    booktabs = TRUE,
-    align   = "lrrrrrrr",
-    escape  = FALSE,       # needed for the \\% in the column names
-    linesep = "",          # no automatic spacing every 5 rows
-    caption = "Sample composition by model specification and crisis horizon",
-    label   = "sample_summary"   # becomes \label{tab:sample_summary}
+    format    = "latex",
+    booktabs  = TRUE,
+    align     = paste0("l", strrep("r", 11)),
+    escape    = FALSE,
+    linesep   = "",
+    col.names = c("Outcome",
+                  "Obs.", "PreCrisis obs.", "Countries", "Advanced (\\%)",
+                  "Years", "Obs.", "PreCrisis (\\%)",
+                  "Obs.",
+                  "Years", "Obs.", "PreCrisis (\\%)"),
+    caption   = "Sample composition by model specification and crisis horizon",
+    label     = "sample_summary"
   ) |>
   pack_rows(index = panel_index, bold = TRUE, italic = FALSE,
             latex_gap_space = "0.4em") |>
-  add_header_above(c(" " = 1, "Full sample" = 4, "Train/test split" = 3)) |>
-  kable_styling(latex_options = "hold_position", position = "center")
+  add_header_above(c(" " = 1, "Full sample" = 4, "Training" = 3,
+                     "Embargo" = 1, "Testing" = 3)) |>
+  kable_styling(latex_options = c("hold_position", "scale_down"),
+                position = "center")
 
 
 # 5 Estimate Logit Models =====================================================
@@ -232,12 +265,6 @@ modelsummary(
 
 ## 5.2 Out-of-sample ==========================================================
 
-last_known_crisis_year <- 2025
-
-horizon_of <- function(outcome) as.integer(sub("precrisis", "", outcome))
-
-max_test_year <- function(outcome) last_known_crisis_year - horizon_of(outcome)
-
 forecast_logit <- function(formula, data, forecast_years, horizon) {
   
   predictions <- map(forecast_years, function(test_year) {
@@ -294,8 +321,6 @@ logit_auc <- logit_oos_results |>
   unnest(metrics)
 
 # 4. Cross-validation =========================================================
-
-# +++ All precisis variables +++ =============================================
 
 # Outcome / horizon bookkeeping ------------------------------------------
 
@@ -840,174 +865,6 @@ modelsummary(
 )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ROC and PR Curves =================================================================
-
-oos_results <- list(
-  Logit = logit_oos_results,
-  MLP   = mlp_oos_results_all,
-  SVM   = svm_oos_results_all,
-  RF    = rf_oos_results_all
-)
-
-create_roc <- function(model_results, specification, model_name) {
-  
-  model_results[[specification]] |>
-    roc_curve(
-      truth = precrisis3,
-      .pred_1,
-      event_level = "second"
-    ) |>
-    mutate(
-      model = model_name,
-      specification = specification
-    )
-}
-
-create_pr <- function(model_results, specification, model_name) {
-  
-  model_results[[specification]] |>
-    pr_curve(
-      truth = precrisis3,
-      .pred_1,
-      event_level = "second"
-    ) |>
-    mutate(
-      model = model_name,
-      specification = specification
-    )
-}
-
-create_curves <- function(curve_function) {
-  
-  map(
-    names(specs),
-    function(spec) {
-      
-      imap(
-        oos_results,
-        ~ curve_function(
-          .x,
-          specification = spec,
-          model_name = .y
-        )
-      ) |>
-        list_rbind()
-    }
-  ) |>
-    list_rbind()
-}
-
-roc_all <- create_curves(create_roc)
-pr_all  <- create_curves(create_pr)
-
-p1 <- ggplot(
-  roc_all,
-  aes(
-    x = 1 - specificity,
-    y = sensitivity,
-    color = model,
-    linetype = model
-  )
-) +
-  geom_line(linewidth = 1) +
-  geom_abline(linetype = "dashed") +
-  coord_equal() +
-  facet_wrap(~ specification) +
-  labs(
-    title = "ROC Curves",
-    x = "False Positive Rate",
-    y = "True Positive Rate"
-  ) +
-  theme(plot.title = element_text(hjust = 0.5))
-
-p2 <- ggplot(
-  pr_all,
-  aes(
-    x = recall,
-    y = precision,
-    color = model,
-    linetype = model
-    )
-  ) +
-  geom_line(linewidth = 1) +
-  coord_equal() +
-  facet_wrap(~ specification) +
-  labs(
-    title = "PR Curves",
-    x = "Recall",
-    y = "Precision"
-  ) +
-  theme(plot.title = element_text(hjust = 0.5))
-
-p1 / p2 +
-  plot_layout(
-    guides = "collect" # Eine gemeinsame Legende
-  ) &
-  theme(
-    legend.position='bottom',
-    legend.title = element_blank()
-    )
-
-# Shapley Values =============================================================
-set.seed(123)
-
-train_data <- panels_ml$full |>
-  filter(year >= 1970, year <= 2006)
-
-test_data <- panels_ml$full |>
-  filter(year == 2007)
-
-final_workflow <- make_rf_workflow(panels_ml$full) |>
-  finalize_workflow(best_rf$full)
-
-fit <- final_workflow |>
-  fit(data = train_data)
-
-# Extract ranger model
-rf_model <- extract_fit_engine(fit)
-
-X_train <- train_data |>
-  select(-iso3c, -year, -precrisis3)
-
-X_test <- test_data |>
-  select(-iso3c, -year, -precrisis3)
-
-unified_rf <- ranger.unify(rf_model, X_train)
-
-shap_2007 <- treeshap(unified_rf, X_test)
-
-pred <- predict(
-  fit,
-  new_data = test_data,
-  type = "prob"
-)
-
-pred
-
-plot_feature_importance(shap_2007)
-
-plot_contribution(shap_2007, obs = 48)
 
 
 # Robustness Checks ==========================================================
