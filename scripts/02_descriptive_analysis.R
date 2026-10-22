@@ -102,6 +102,23 @@ event_summary <- panel_event |>
     .groups = "drop"
   )
 
+# Summary statistics for each event time and variable grouped by advanced/developing countries
+event_summary_grouped <- panel_event |>
+  select(advanced, event_time, all_of(event_vars)) |>
+  pivot_longer(
+    cols = all_of(event_vars),
+    names_to = "variable",
+    values_to = "value"
+  ) |>
+  group_by(advanced, event_time, variable) |>
+  summarise(
+    median = median(value, na.rm = TRUE),
+    p25    = quantile(value, 0.25, na.rm = TRUE),
+    p75    = quantile(value, 0.75, na.rm = TRUE),
+    n      = sum(!is.na(value)),
+    .groups = "drop"
+  )
+
 var_labs <- c(
   cgdppriv_growth = "Private credit-to-GDP growth",
   tlpriv_rgrowth   = "Private credit growth (real)",
@@ -117,24 +134,24 @@ var_labs <- c(
 )
 
 event_summary <- event_summary |>
+  mutate(variable = recode(variable, !!!var_labs))
+
+event_summary_grouped <- event_summary_grouped |> 
   mutate(
-    variable = recode(variable, !!!var_labs)
-  )
+    variable = recode(variable, !!!var_labs),
+    advanced = factor(
+      recode_values(advanced, 0 ~ "Emerging and Developing Economies", 1 ~ "Advanced Economies"),
+      levels = c("Emerging and Developing Economies", "Advanced Economies")))
 
 ggplot(event_summary, aes(x = event_time)) +
-  
   # Interquartile range
   geom_ribbon(aes(ymin = p25, ymax = p75), alpha = 0.2) +
-  
   # Median
   geom_line(aes(y = median), linewidth = 0.8) +
-  
   # Crisis onset
   geom_vline(xintercept = 0, linetype = "dashed") +
   geom_hline(yintercept = 0, linetype = "dashed") +
-  
   facet_wrap(~ variable, scales = "free_y", ncol = 3) +
-  
   labs(
     x = "Years relative to crisis onset",
     y = NULL
@@ -148,7 +165,28 @@ ggplot(event_summary, aes(x = event_time)) +
 
 
 
-
+ggplot(event_summary_grouped, aes(x = event_time)) +
+  # Interquartile range
+  geom_ribbon(aes(ymin = p25, ymax = p75, fill = factor(advanced)), alpha = 0.2) +
+  # Median
+  geom_line(aes(y = median, colour = factor(advanced)), linewidth = 0.8) +
+  # Crisis onset
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~ variable, scales = "free_y", ncol = 3) +
+  labs(
+    x = "Years relative to crisis onset",
+    y = NULL
+  ) +
+  theme(
+    strip.text = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 10),
+    legend.position = "bottom",
+    legend.title = element_blank()
+  ) +
+  scale_x_continuous(breaks = seq(-5,5,1))
+  
 panel_expl <- panel |> 
   mutate(
     `Real GDP growth (%)` = rgdpgrowth,
